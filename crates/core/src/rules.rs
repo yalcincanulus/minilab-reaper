@@ -192,6 +192,10 @@ pub enum Command {
     MoveFader(u8, u8),
     /// Knob index 0-7 and its position 0..=127, for the mapped parameter.
     SetKnob(u8, u8),
+    /// Encoder clicked and turned: the knobs move this many pages of 8 parameters.
+    KnobPage(i32),
+    /// Encoder clicked and released without turning (no Shift).
+    EncoderClick,
     /// The device switched program or pad bank: it forgot what we drew.
     Redraw,
 }
@@ -206,6 +210,35 @@ pub fn command(event: &Event) -> Option<Command> {
         Event::Knob { index, value, program: Program::Daw } => Some(Command::SetKnob(index, value)),
         Event::Pad { index, bank: PadBank::A, on: true, .. } => Some(Command::SelectTrack(index as usize)),
         _ => None,
+    }
+}
+
+/// Device input -> commands, for inputs that depend on what came before: the encoder held down and turned
+/// ("click + turn", parameter pages) is not a click.
+#[derive(Debug, Default)]
+pub struct Controls {
+    encoder_held: bool,
+    turned_while_held: bool,
+}
+
+impl Controls {
+    pub fn handle(&mut self, event: &Event) -> Option<Command> {
+        match *event {
+            Event::EncoderClick { pressed: true, shifted: false } => {
+                self.encoder_held = true;
+                self.turned_while_held = false;
+                None
+            }
+            Event::EncoderClick { pressed: false, shifted: false } => {
+                let was_held = std::mem::take(&mut self.encoder_held);
+                (was_held && !self.turned_while_held).then_some(Command::EncoderClick)
+            }
+            Event::Encoder { delta, shifted: false } if self.encoder_held => {
+                self.turned_while_held = true;
+                Some(Command::KnobPage(delta as i32))
+            }
+            _ => command(event),
+        }
     }
 }
 
@@ -359,6 +392,22 @@ mod tests {
         assert_eq!(command(&Event::Transport { button: TransportButton::Play, pressed: false }), None);
         let pad = Event::Pad { index: 2, bank: PadBank::A, velocity: 90, on: true };
         assert_eq!(command(&pad), Some(Command::SelectTrack(2)));
+    }
+
+    #[test]
+    fn click_and_turn_pages_click_alone_clicks() {
+        let mut c = Controls::default();
+        let click = |pressed| Event::EncoderClick { pressed, shifted: false };
+        let turn = |delta| Event::Encoder { delta, shifted: false };
+        assert_eq!(c.handle(&click(true)), None);
+        assert_eq!(c.handle(&turn(1)), Some(Command::KnobPage(1)));
+        assert_eq!(c.handle(&turn(1)), Some(Command::KnobPage(1)));
+        assert_eq!(c.handle(&click(false)), None); // it was a page turn, not a click
+        assert_eq!(c.handle(&click(true)), None);
+        assert_eq!(c.handle(&click(false)), Some(Command::EncoderClick));
+        assert_eq!(c.handle(&turn(-1)), None); // plain turn: not mapped yet
+        let shifted = Event::Encoder { delta: 1, shifted: true };
+        assert_eq!(c.handle(&shifted), Some(Command::SelectTrackBy(1)));
     }
 
     #[test]

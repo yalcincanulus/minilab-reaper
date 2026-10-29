@@ -19,7 +19,7 @@ use fragile::Fragile;
 use minilab3_core::protocol::{self, hex, MidiParser, TransportButton};
 use minilab3_core::queue::{Key, OutQueue};
 use minilab3_core::pickup::{Move, Pickup};
-use minilab3_core::rules::{self, Command, DeviceStatus, FaderTarget, Param, State, Track, Transport};
+use minilab3_core::rules::{self, Command, Controls, DeviceStatus, FaderTarget, Param, State, Track, Transport};
 use minilab3_core::watchdog::{self, Watchdog};
 use reaper_low::raw::{midi_Output, MediaTrack, MIDI_event_t};
 use reaper_low::PluginContext;
@@ -196,20 +196,50 @@ impl Api {
         Some((r as u8, g as u8, b as u8))
     }
 
-    /// Parameter `param` of the track's first FX, if it exists.
-    fn knob_param(&self, track: *mut MediaTrack, param: c_int) -> Option<Param> {
+    /// The FX the knobs control: the focused FX window if it belongs to the selected track, else that track's first
+    /// FX.
+    fn knob_fx(&self) -> Option<(*mut MediaTrack, c_int)> {
+        let track = self.selected_track()?;
+        let (mut track_number, mut item, mut fx) = (0, 0, 0);
+        let focused = unsafe { self.0.GetFocusedFX2(&mut track_number, &mut item, &mut fx) };
+        // Bit 0: a track FX (not a take FX); bit 2: the window is no longer focused but still open. Track numbers
+        // are 1-based (0 = master). FX numbers with the high bits set are input or monitoring FX: skip those.
+        let number = self.info(track, c"IP_TRACKNUMBER") as c_int;
+        if focused & 1 != 0 && item < 0 && track_number == number && fx >> 16 == 0 {
+            return Some((track, fx));
+        }
+        (unsafe { self.0.TrackFX_GetCount(track) } > 0).then_some((track, 0))
+    }
+
+    fn fx_name(&self, track: *mut MediaTrack, fx: c_int) -> String {
+        let mut name = [0 as c_char; 128];
         unsafe {
-            if self.0.TrackFX_GetCount(track) == 0 || param >= self.0.TrackFX_GetNumParams(track, 0) {
+            self.0.TrackFX_GetFXName(track, fx, name.as_mut_ptr(), name.len() as c_int);
+            let full = CStr::from_ptr(name.as_ptr()).to_string_lossy().into_owned();
+            // "VSTi: ReaSynth (Cockos)" -> "ReaSynth"
+            let short = full.split_once(": ").map_or(full.as_str(), |(_, rest)| rest);
+            short.split(" (").next().unwrap_or(short).to_string()
+        }
+    }
+
+    fn param_count(&self, track: *mut MediaTrack, fx: c_int) -> c_int {
+        unsafe { self.0.TrackFX_GetNumParams(track, fx) }
+    }
+
+    /// Parameter `param` of an FX, if it exists.
+    fn knob_param(&self, track: *mut MediaTrack, fx: c_int, param: c_int) -> Option<Param> {
+        unsafe {
+            if param >= self.0.TrackFX_GetNumParams(track, fx) {
                 return None;
             }
             let mut name = [0 as c_char; 64];
             let mut value = [0 as c_char; 64];
-            self.0.TrackFX_GetParamName(track, 0, param, name.as_mut_ptr(), name.len() as c_int);
-            self.0.TrackFX_GetFormattedParamValue(track, 0, param, value.as_mut_ptr(), value.len() as c_int);
+            self.0.TrackFX_GetParamName(track, fx, param, name.as_mut_ptr(), name.len() as c_int);
+            self.0.TrackFX_GetFormattedParamValue(track, fx, param, value.as_mut_ptr(), value.len() as c_int);
             Some(Param {
                 name: CStr::from_ptr(name.as_ptr()).to_string_lossy().into_owned(),
                 value: CStr::from_ptr(value.as_ptr()).to_string_lossy().into_owned(),
-                normalized: self.0.TrackFX_GetParamNormalized(track, 0, param),
+                normalized: self.0.TrackFX_GetParamNormalized(track, fx, param),
             })
         }
     }
@@ -298,6 +328,10 @@ struct Surface {
     last_device_scan: Option<Instant>,
     watchdog: Watchdog,
     pickup: Pickup,
+    controls: Controls,
+    /// Which page of 8 parameters the knobs control, and the FX it belongs to (a new FX starts at page 1).
+    knob_page: usize,
+    knob_fx: Option<(*mut MediaTrack, c_int)>,
     /// Per fader: `Some(up)` after a move that did not catch the value yet.
     fader_waiting: [Option<bool>; 4],
     /// Screen message and when it ends.
@@ -332,6 +366,9 @@ impl Surface {
             last_device_scan: None,
             watchdog: Watchdog::default(),
             pickup: Pickup::default(),
+            controls: Controls::default(),
+            knob_page: 0,
+            knob_fx: None,
             fader_waiting: [None; 4],
             notification: None,
             blink: true,
@@ -402,7 +439,10 @@ impl Surface {
             selected_volume: selected.map(|t| api.info(t, c"D_VOL")).unwrap_or(1.0),
             selected_armed: selected.is_some_and(|t| api.info(t, c"I_RECARM") == 1.0),
             transport: Transport { playing: play & 1 != 0, recording: play & 4 != 0, repeat },
-            knobs: std::array::from_fn(|i| selected.and_then(|t| api.knob_param(t, i as c_int))),
+            knobs: std::array::from_fn(|i| {
+                let (t, fx) = api.knob_fx()?;
+                api.knob_param(t, fx, (self.knob_page * 8 + i) as c_int)
+            }),
             faders: std::array::from_fn(|i| {
                 let mut f = selected.and_then(|t| api.fader_target(t, i))?;
                 f.waiting = self.fader_waiting[i];
@@ -451,7 +491,7 @@ impl Surface {
             self.parser.push(&bytes, |m| messages.push(m.to_vec()));
             for m in messages {
                 let Some(event) = protocol::decode(&m) else { continue };
-                let cmd = self.status.update(&event).or_else(|| rules::command(&event));
+                let cmd = self.status.update(&event).or_else(|| self.controls.handle(&event));
                 // Watchdog pings get a program reply every few seconds: log those only when something changes.
                 if cmd.is_some() || !matches!(event, protocol::Event::Program(_)) {
                     self.log(format!("in  {} {event:?}", hex(&m)));
@@ -465,6 +505,11 @@ impl Surface {
 
     fn run_command(&mut self, cmd: Command) {
         self.log(format!("cmd {cmd:?}"));
+        // The knobs' FX may have changed since the last redraw (a window closed): settle it first, or a new page
+        // would be reset right after it is chosen.
+        if matches!(cmd, Command::SetKnob(..) | Command::KnobPage(_)) {
+            self.sync_knobs();
+        }
         let api = &self.api;
         match cmd {
             Command::SelectTrackBy(step) => {
@@ -518,16 +563,38 @@ impl Surface {
                 }
             }
             Command::SetKnob(knob, value) => {
-                if let Some(t) = api.selected_track() {
-                    unsafe { api.0.TrackFX_SetParamNormalized(t, 0, knob as c_int, value as f64 / 127.0) };
+                if let Some((t, fx)) = api.knob_fx() {
+                    let param = (self.knob_page * 8) as c_int + knob as c_int;
+                    if param < api.param_count(t, fx) {
+                        unsafe { api.0.TrackFX_SetParamNormalized(t, fx, param, value as f64 / 127.0) };
+                    }
                 }
             }
+            Command::KnobPage(step) => {
+                if let Some((t, fx)) = api.knob_fx() {
+                    let pages = (api.param_count(t, fx).max(1) as usize).div_ceil(8);
+                    self.knob_page = (self.knob_page as i64 + step as i64).clamp(0, pages as i64 - 1) as usize;
+                    let name = api.fx_name(t, fx);
+                    self.notify(name, format!("Page {}/{}", self.knob_page + 1, pages));
+                }
+            }
+            // Free for now; the navigation slice gives it a job (show/close the FX).
+            Command::EncoderClick => {}
             Command::Redraw => self.connect(),
         }
         self.dirty.set(true);
     }
 
     /// Release the faders when the selected track changed, or when a value moved elsewhere (pickup).
+    /// Start at page 1 when the knobs move to another FX.
+    fn sync_knobs(&mut self) {
+        let fx = self.api.knob_fx();
+        if fx != self.knob_fx {
+            self.knob_fx = fx;
+            self.knob_page = 0;
+        }
+    }
+
     fn sync_faders(&mut self) {
         let selected = self.api.selected_track();
         if selected != self.faders_track {
@@ -590,6 +657,7 @@ impl ControlSurface for Surface {
         self.tick_timers();
         if self.dirty.get() {
             self.sync_faders();
+            self.sync_knobs();
         }
         if self.dirty.replace(false) {
             for (key, msg) in rules::render(&self.state()) {
@@ -628,6 +696,10 @@ impl ControlSurface for Surface {
         self.dirty.set(true);
     }
     fn ext_set_fx_param(&self, _: reaper_medium::ExtSetFxParamArgs) -> i32 {
+        self.dirty.set(true);
+        0
+    }
+    fn ext_set_focused_fx(&self, _: reaper_medium::ExtSetFocusedFxArgs) -> i32 {
         self.dirty.set(true);
         0
     }
