@@ -16,15 +16,19 @@ The MiniLab must be in its DAW program (Shift + Pad 3).
 | Pads 1–8 (bank A) | Lit in the colours of tracks 1–8, the selected track bright. Press: select that track |
 | Shift + encoder | Select the previous or next track |
 | Shift + encoder click | Arm or disarm the selected track |
-| Shift + pads 4–8 | Loop, stop, play, record, tap tempo. Their lights follow Reaper's state while Shift is held |
-| Fader 1 | Volume of the selected track |
-| Knobs 1–8 | Parameters 1–8 of the selected track's first plugin. Turning a knob shows the name and value on the screen |
+| Encoder click + turn | Page through the plugin's parameters, 8 at a time |
+| Shift + pads 4–8 | Loop, play/pause, stop, record, tap tempo. Lights follow Reaper's state while Shift is held; play and record blink while running. Tap tempo and loop show a short message |
+| Faders 1–4 | Volume, send 1, send 2, pan of the selected track. A fader takes over once it reaches the current value (pickup); until then the popup says which way to move it |
+| Knobs 1–8 | Parameters of the plugin whose window is open on the selected track, else its first plugin. Turning a knob shows the name and value on the screen |
 | Keys | Play the armed track, as usual |
 
 It also recovers when the MiniLab is unplugged and plugged back in, and gives the MiniLab back its own screen and
 colours when Reaper quits.
 
-Not yet: faders 2–4 (sends, pan), pads bank B, the encoder without Shift.
+Shift + Record with no armed track shows "No track armed" instead of opening Reaper's blocking warning.
+
+Not yet: the encoder without Shift (planned: tracks, click opens the plugin; Shift + encoder moves the playhead),
+pads bank B, a mixer mode. `docs/daw-integrations.md` compares what Arturia's integrations do in other DAWs.
 
 ## Build and install
 
@@ -45,7 +49,8 @@ In Reaper's Preferences → MIDI Devices:
 ## Known limits
 
 - Knob and fader moves also reach armed tracks as MIDI, since Reaper and the extension share the input.
-- Shift + Record with no armed track opens Reaper's "Record Warning" dialog.
+- Reaper's modal dialogs (e.g. "save or delete recorded files" after a recording) block the extension until
+  closed. Turning that prompt off (Preferences → Recording) keeps the MiniLab responsive.
 - The recovery after a replug uses `/proc/asound/cards` to wait until the MiniLab is back (Linux only).
 
 ## Layout
