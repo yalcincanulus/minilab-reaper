@@ -17,8 +17,10 @@ program (Shift + Pad 3), and `hello` must be sent before LEDs and the screen res
   ml3.py raw <hex bytes>                anything, e.g. "F0 00 20 6B 7F 42 ... F7"
   ml3.py listen [seconds]               dump what the device sends (hex)
 
+When the raw port is busy (Reaper running), it falls back to the ALSA sequencer (aseqsend, aseqdump).
+
 Options: --port hw:X,0,0 (default: the first port named "Minilab3 MIDI"),
-         --gap ms between messages (default 15).
+         --gap ms between messages (default 2).
 """
 import re
 import subprocess
@@ -87,10 +89,30 @@ def find_port():
     sys.exit("No 'Minilab3 MIDI' port in `amidi -l`:\n" + out)
 
 
+def seq_port():
+    """The ALSA sequencer port of 'Minilab3 MIDI', e.g. '36:0'."""
+    out = subprocess.run(["aconnect", "-l"], capture_output=True, text=True, check=True).stdout
+    client = None
+    for line in out.splitlines():
+        m = re.match(r"client (\d+): '([^']*)'", line)
+        if m:
+            client = m.group(1) if re.search(r"minilab\s*3", m.group(2), re.I) else None
+        elif client and re.match(r"\s+0 '", line):
+            return f"{client}:0"
+    sys.exit("No Minilab3 client in `aconnect -l`")
+
+
 def send(port, msgs, gap_ms):
+    """Send through amidi (raw port). When something else holds the raw port (Reaper, through PipeWire's
+    MIDI bridge), send through the ALSA sequencer with aseqsend instead."""
+    seq = None
     for m in msgs:
         print(">", hexs(m))
-        subprocess.run(["amidi", "-p", port, "-S", hexs(m)], check=True)
+        if seq is None and subprocess.run(["amidi", "-p", port, "-S", hexs(m)], stderr=subprocess.DEVNULL).returncode != 0:
+            seq = seq_port()
+            print(f"(raw port busy: using the sequencer, {seq})")
+        if seq:
+            subprocess.run(["aseqsend", "-p", seq, hexs(m)], check=True)
         time.sleep(gap_ms / 1000)
 
 
@@ -99,7 +121,7 @@ def parse_hex(s):
 
 
 def main(argv):
-    port, gap = None, 15
+    port, gap = None, 2
     args = []
     flags = set()
     it = iter(argv)
@@ -123,7 +145,9 @@ def main(argv):
 
     if cmd == "listen":
         secs = rest[0] if rest else "10"
-        subprocess.run(["amidi", "-p", port, "-d", "-t", secs])
+        if subprocess.run(["amidi", "-p", port, "-d", "-t", secs]).returncode != 0:
+            print(f"(raw port busy: listening on the sequencer for {secs} s)")
+            subprocess.run(["timeout", secs, "aseqdump", "-p", seq_port()])
         return
 
     if cmd == "hello":
