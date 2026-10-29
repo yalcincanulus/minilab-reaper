@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Drive the system Reaper from a shell (KDE Wayland; Reaper runs on XWayland).
 #
+#   tools/reaper.sh install               build the extension and link it into Reaper's UserPlugins (restart Reaper)
 #   tools/reaper.sh start [project.rpp]   start Reaper (default: reaper/test.RPP) unless it is running
 #   tools/reaper.sh run script.lua        run a ReaScript inside the running Reaper
 #   tools/reaper.sh shot                  screenshot of Reaper's main window only -> .scratch/shots/reaper-latest.png
@@ -24,6 +25,12 @@ main_window() {
 }
 
 case "${1:-}" in
+  install)
+    cargo build --manifest-path "$root/Cargo.toml" -p reaper-minilab3
+    plugins="$HOME/.config/REAPER/UserPlugins"
+    mkdir -p "$plugins"
+    ln -sf "$root/target/debug/libreaper_minilab3.so" "$plugins/reaper_minilab3.so"
+    echo "Linked $plugins/reaper_minilab3.so. Restart Reaper to load a new build." ;;
   start)
     if pgrep -x reaper >/dev/null; then echo "Reaper is already running."; exit 0; fi
     mkdir -p "$out"
@@ -46,5 +53,5 @@ case "${1:-}" in
     reaper -nonewinst "-closeall$mode" >/dev/null 2>&1 || true
     for _ in $(seq 20); do pgrep -x reaper >/dev/null || { echo "Reaper closed."; exit 0; }; sleep 0.5; done
     echo "Reaper is still running (a save prompt may be open on screen)." >&2; exit 1 ;;
-  *) sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

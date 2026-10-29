@@ -1,0 +1,17 @@
+[package]
+name = "reaper-minilab3"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Reaper extension: native MiniLab 3 support (screen, pad lights, navigation)."
+
+[lib]
+name = "reaper_minilab3"
+crate-type = ["cdylib"]
+
+[dependencies]
+minilab3-core = { path = "../core" }
+reaper-medium = { git = "https://github.com/helgoboss/reaper-rs.git", branch = "master" }
+reaper-low = { git = "https://github.com/helgoboss/reaper-rs.git", branch = "master" }
+reaper-macros = { git = "https://github.com/helgoboss/reaper-rs.git", branch = "master" }
+fragile = "2.0.1"

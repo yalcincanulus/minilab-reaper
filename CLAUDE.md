@@ -44,8 +44,10 @@ MiniLab screen and detects each action over MIDI works well: the user can't see 
 
 ## Driving Reaper
 
-- `tools/reaper.sh start | run script.lua | shot | quit [--discard]`. `run` executes a ReaScript inside the running
-  Reaper; scripts report by writing a file. `shot` captures only Reaper's window (the user has two screens; their
+- `tools/reaper.sh install | start | run script.lua | shot | quit [--discard]`. `install` builds the extension and
+  links it into `~/.config/REAPER/UserPlugins`; Reaper can't unload extensions, so restart it after each build.
+  The extension logs to `~/.config/REAPER/minilab3.log`.
+  `run` executes a ReaScript inside the running Reaper; scripts report by writing a file. `shot` captures only Reaper's window (the user has two screens; their
   desktop stays private).
 - Reaper's MIDI goes through PipeWire's JACK bridge: ports are named `Midi-Bridge:Minilab3: MIDI ...`. MIDI input
   device 1 and output device 1 are the MiniLab (`midiins=2`, `midiouts=2` bitmasks in `reaper.ini`).
