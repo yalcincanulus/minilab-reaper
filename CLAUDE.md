@@ -39,8 +39,8 @@ MiniLab screen and detects each action over MIDI works well: the user can't see 
 - DAW program (Shift + Pad 3 toggles it) and the connect message come before LED and screen messages.
 - Pace outgoing SysEx about 2 ms apart through a keyed queue (a newer message replaces a pending one with the same
   key). Bursts with no gap lose messages.
-- The device keeps Shift + pads 1–3 (Arp, Pad bank, Prog) for itself. Shift + pads 4–8 are transport: their LEDs
-  are verified, which pads send CC 105–109 is still open.
+- The device keeps Shift + pads 1–3 (Arp, Pad bank, Prog) for itself. Shift + pads 4–8 send the transport CCs
+  105–109 (loop, stop, play, record, tap); the value is the press strength.
 
 ## Driving Reaper
 
