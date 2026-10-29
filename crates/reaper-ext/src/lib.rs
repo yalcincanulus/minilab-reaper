@@ -167,6 +167,12 @@ impl Api {
     }
 }
 
+/// Whether the MiniLab is connected, from the kernel's sound card list. `None` where that list doesn't exist
+/// (not Linux).
+fn device_plugged_in() -> Option<bool> {
+    std::fs::read_to_string("/proc/asound/cards").ok().map(|cards| cards.contains("Minilab3"))
+}
+
 struct Surface {
     api: Api,
     out_dev: Option<c_int>,
@@ -365,10 +371,14 @@ impl ControlSurface for Surface {
         let recording = self.api.0.GetPlayState() & 4 != 0;
         match self.watchdog.tick(self.started.elapsed(), recording) {
             Some(watchdog::Action::Ping) => self.queue.push(Key::Once, protocol::request_program()),
-            Some(watchdog::Action::ResetMidi) => {
-                self.log("device silent: Reset all MIDI devices");
-                self.api.command(41175);
-            }
+            Some(watchdog::Action::ResetMidi) => match device_plugged_in() {
+                // Resetting while it is unplugged makes Reaper show a blocking "could not open" dialog.
+                Some(false) => self.log("device silent and not plugged in: waiting"),
+                _ => {
+                    self.log("device silent: Reset all MIDI devices");
+                    self.api.command(41175);
+                }
+            },
             None => {}
         }
         if self.dirty.replace(false) {

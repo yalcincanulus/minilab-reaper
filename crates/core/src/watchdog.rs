@@ -14,7 +14,7 @@ pub const PING_AFTER: Duration = Duration::from_secs(3);
 /// Lost after this much silence (two unanswered pings).
 pub const LOST_AFTER: Duration = Duration::from_secs(7);
 /// While lost, reset Reaper's MIDI devices this often.
-pub const RESET_EVERY: Duration = Duration::from_secs(10);
+pub const RESET_EVERY: Duration = Duration::from_secs(4);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -108,7 +108,7 @@ mod tests {
         assert!(w.is_lost());
         assert_eq!(w.tick(s(9.0), false), None);
         assert_eq!(w.tick(s(10.0), false), Some(Action::Ping));
-        assert_eq!(w.tick(s(17.0), false), Some(Action::ResetMidi));
+        assert_eq!(w.tick(s(11.0), false), Some(Action::ResetMidi));
         assert!(w.on_input(s(18.0))); // back: reconnect
         assert!(!w.is_lost());
         assert!(!w.on_input(s(18.1)));
