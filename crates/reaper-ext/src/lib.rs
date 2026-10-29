@@ -359,12 +359,3 @@ impl ControlSurface for Surface {
     }
 }
 
-impl Drop for Surface {
-    fn drop(&mut self) {
-        // Reaper is closing: give the device back its own LEDs.
-        if let Some(out) = self.out_dev {
-            self.api.send_midi(out, &protocol::disconnect());
-        }
-        self.log("unloaded");
-    }
-}
