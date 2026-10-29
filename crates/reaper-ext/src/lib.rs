@@ -30,6 +30,10 @@ const DEVICE_NAME: &str = "Minilab3: MIDI";
 /// Messages per `run()` tick (~30 ms): well under what the device's input buffer takes.
 const MAX_PER_TICK: usize = 8;
 const LOG_FILE: &str = "minilab3.log";
+/// How long a notification replaces the screen.
+const NOTIFICATION_TIME: std::time::Duration = std::time::Duration::from_millis(1200);
+/// Half period of the play/record blink.
+const BLINK_MS: u128 = 400;
 
 #[reaper_extension_plugin]
 fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
@@ -296,6 +300,9 @@ struct Surface {
     pickup: Pickup,
     /// Per fader: `Some(up)` after a move that did not catch the value yet.
     fader_waiting: [Option<bool>; 4],
+    /// Screen message and when it ends.
+    notification: Option<(String, String, Instant)>,
+    blink: bool,
     /// The selected track at the last redraw, to release the faders when it changes.
     faders_track: Option<*mut MediaTrack>,
     log: Option<File>,
@@ -326,6 +333,8 @@ impl Surface {
             watchdog: Watchdog::default(),
             pickup: Pickup::default(),
             fader_waiting: [None; 4],
+            notification: None,
+            blink: true,
             faders_track: None,
             log,
         };
@@ -399,7 +408,32 @@ impl Surface {
                 f.waiting = self.fader_waiting[i];
                 Some(f)
             }),
+            notification: self.notification.as_ref().map(|(a, b, _)| (a.clone(), b.clone())),
+            blink: self.blink,
         }
+    }
+
+    fn notify(&mut self, line1: impl Into<String>, line2: impl Into<String>) {
+        self.notification = Some((line1.into(), line2.into(), Instant::now() + NOTIFICATION_TIME));
+        self.dirty.set(true);
+    }
+
+    /// End notifications and flip the blink phase while the transport runs.
+    fn tick_timers(&mut self) {
+        if self.notification.as_ref().is_some_and(|(_, _, end)| Instant::now() >= *end) {
+            self.notification = None;
+            self.dirty.set(true);
+        }
+        let running = self.api.0.GetPlayState() & 5 != 0;
+        let blink = !running || (self.started.elapsed().as_millis() / BLINK_MS).is_multiple_of(2);
+        if blink != self.blink {
+            self.blink = blink;
+            self.dirty.set(true);
+        }
+    }
+
+    fn any_track_armed(&self) -> bool {
+        (0..self.api.track_count()).filter_map(|i| self.api.track(i)).any(|t| self.api.info(t, c"I_RECARM") == 1.0)
     }
 
     fn read_input(&mut self) {
@@ -447,13 +481,30 @@ impl Surface {
                     api.set_info(t, c"I_RECARM", 1.0 - armed);
                 }
             }
-            Command::Transport(button) => api.command(match button {
-                TransportButton::Loop => 1068,   // Transport: Toggle repeat
-                TransportButton::Stop => 1016,   // Transport: Stop
-                TransportButton::Play => 1007,   // Transport: Play
-                TransportButton::Record => 1013, // Transport: Record
-                TransportButton::Tap => 1134,    // Transport: Tap tempo
-            }),
+            Command::Transport(button) => match button {
+                TransportButton::Loop => {
+                    api.command(1068); // Transport: Toggle repeat
+                    let on = api.0.GetSetRepeat(-1) == 1;
+                    self.notify("Loop", if on { "ON" } else { "OFF" });
+                }
+                TransportButton::Stop => api.command(1016), // Transport: Stop
+                TransportButton::Play => api.command(40073), // Transport: Play/pause
+                TransportButton::Record => {
+                    let recording = api.0.GetPlayState() & 4 != 0;
+                    // Recording with nothing armed opens Reaper's modal "Record Warning", which blocks Reaper
+                    // (and this extension) until someone clicks it. Say so on the screen instead.
+                    if recording || self.any_track_armed() {
+                        self.api.command(1013); // Transport: Record (toggles)
+                    } else {
+                        self.notify("No track armed", "Shift+click: arm");
+                    }
+                }
+                TransportButton::Tap => {
+                    api.command(1134); // Transport: Tap tempo
+                    let bpm = api.0.Master_GetTempo();
+                    self.notify("Tap Tempo", format!("{bpm:.0} BPM"));
+                }
+            },
             Command::MoveFader(fader, position) => {
                 let fader = fader as usize;
                 if let Some((t, target)) = api.selected_track().and_then(|t| Some((t, api.fader_target(t, fader)?))) {
@@ -536,6 +587,7 @@ impl ControlSurface for Surface {
             },
             None => {}
         }
+        self.tick_timers();
         if self.dirty.get() {
             self.sync_faders();
         }

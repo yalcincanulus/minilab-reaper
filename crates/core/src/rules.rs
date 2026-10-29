@@ -57,6 +57,10 @@ pub struct State {
     pub knobs: [Option<Param>; 8],
     /// Faders 1-4; `None` where there is nothing to control (no such send).
     pub faders: [Option<FaderTarget>; 4],
+    /// A short message that replaces the screen for a moment ("Tap Tempo", "120 BPM").
+    pub notification: Option<(String, String)>,
+    /// Blink phase: play and record LEDs alternate full and dim while running.
+    pub blink: bool,
 }
 
 const DIM: f32 = 0.15;
@@ -100,14 +104,15 @@ pub fn render(state: &State) -> Vec<(Key, Vec<u8>)> {
         arm: state.selected.is_some() && state.selected_armed,
         arp: false,
     };
-    let screen = match state.selected {
-        Some(i) => protocol::screen(
+    let screen = match (&state.notification, state.selected) {
+        (Some((line1, line2)), _) => protocol::screen(line1, line2, Icons::default()),
+        (None, Some(i)) => protocol::screen(
             &state.selected_name,
             &format!("{}/{}  {}", i + 1, state.track_count, volume_text(state.selected_volume)),
             icons,
         ),
-        None if state.track_count == 0 => protocol::screen("No tracks", "", icons),
-        None => protocol::screen("No track", "selected", icons),
+        (None, None) if state.track_count == 0 => protocol::screen("No tracks", "", icons),
+        (None, None) => protocol::screen("No track", "selected", icons),
     };
     out.push((Key::Screen, screen));
 
@@ -160,8 +165,9 @@ pub fn render(state: &State) -> Vec<(Key, Vec<u8>)> {
     let transport_leds = [
         (TransportButton::Loop, t.repeat, Rgb { r: 127, g: 50, b: 0 }),
         (TransportButton::Stop, !t.playing && !t.recording, Rgb { r: 127, g: 127, b: 127 }),
-        (TransportButton::Play, t.playing, Rgb { r: 0, g: 127, b: 0 }),
-        (TransportButton::Record, t.recording, Rgb { r: 127, g: 0, b: 0 }),
+        // Play and record blink while running, as in Arturia's integrations.
+        (TransportButton::Play, t.playing && state.blink, Rgb { r: 0, g: 127, b: 0 }),
+        (TransportButton::Record, t.recording && state.blink, Rgb { r: 127, g: 0, b: 0 }),
         (TransportButton::Tap, false, Rgb { r: 127, g: 127, b: 127 }),
     ];
     for (i, (_, on, color)) in transport_leds.into_iter().enumerate() {
@@ -245,6 +251,8 @@ mod tests {
             transport: Transport { playing: true, ..Default::default() },
             knobs: [const { None }; 8],
             faders: [const { None }; 4],
+            notification: None,
+            blink: true,
         }
     }
 
@@ -299,6 +307,23 @@ mod tests {
         assert_eq!(find(&out, Key::Parameter(31)), protocol::parameter(31, "Pan", "Center (up)"));
         let fader = Event::Fader { index: 2, value: 10, program: Program::Daw };
         assert_eq!(command(&fader), Some(Command::MoveFader(2, 10)));
+    }
+
+    #[test]
+    fn notification_replaces_the_screen() {
+        let mut s = state();
+        s.notification = Some(("Tap Tempo".into(), "120 BPM".into()));
+        let out = render(&s);
+        assert_eq!(find(&out, Key::Screen), protocol::screen("Tap Tempo", "120 BPM", Icons::default()));
+    }
+
+    #[test]
+    fn play_led_blinks_while_playing() {
+        let mut s = state();
+        let full = protocol::led(0x59, Rgb { r: 0, g: 127, b: 0 });
+        assert_eq!(find(&render(&s), Key::Led(0x59)), full);
+        s.blink = false;
+        assert_ne!(find(&render(&s), Key::Led(0x59)), full);
     }
 
     #[test]
