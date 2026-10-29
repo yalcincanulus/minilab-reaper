@@ -15,6 +15,9 @@ pub const PING_AFTER: Duration = Duration::from_secs(3);
 pub const LOST_AFTER: Duration = Duration::from_secs(7);
 /// While lost, reset Reaper's MIDI devices this often.
 pub const RESET_EVERY: Duration = Duration::from_secs(4);
+/// A gap this long between ticks means Reaper's main loop was frozen (a modal dialog); silence during it says
+/// nothing about the device.
+pub const FROZEN_AFTER: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -29,6 +32,7 @@ pub struct Watchdog {
     last_input: Duration,
     last_ping: Option<Duration>,
     last_reset: Option<Duration>,
+    last_tick: Option<Duration>,
     lost: bool,
 }
 
@@ -51,7 +55,9 @@ impl Watchdog {
     /// Call regularly. `quiet` pauses the watchdog (e.g. while recording: no ping replies in a take, no MIDI reset
     /// in the middle of it); silence counts again from when it ends.
     pub fn tick(&mut self, now: Duration, quiet: bool) -> Option<Action> {
-        if quiet {
+        let frozen = self.last_tick.is_some_and(|t| now.saturating_sub(t) >= FROZEN_AFTER);
+        self.last_tick = Some(now);
+        if quiet || frozen {
             self.last_input = now;
             self.last_ping = None;
             return None;
@@ -88,39 +94,56 @@ mod tests {
         Duration::from_secs_f64(n)
     }
 
+    /// Tick every 0.1 s from `from` to `to` (like Reaper's ~30 ms `run()`), collecting (time, action).
+    fn run(w: &mut Watchdog, from: f64, to: f64, quiet: bool) -> Vec<(f64, Action)> {
+        let mut out = Vec::new();
+        let mut t = from;
+        while t <= to + 1e-9 {
+            if let Some(a) = w.tick(s(t), quiet) {
+                out.push(((t * 10.0).round() / 10.0, a));
+            }
+            t += 0.1;
+        }
+        out
+    }
+
     #[test]
     fn pings_after_silence_and_stays_quiet_while_answered() {
         let mut w = Watchdog::new(s(0.0));
-        assert_eq!(w.tick(s(2.0), false), None);
-        assert_eq!(w.tick(s(3.0), false), Some(Action::Ping));
-        assert_eq!(w.tick(s(3.5), false), None);
-        assert!(!w.on_input(s(3.6))); // the answer
-        assert_eq!(w.tick(s(5.0), false), None);
-        assert_eq!(w.tick(s(6.6), false), Some(Action::Ping));
+        assert_eq!(run(&mut w, 0.0, 3.5, false), vec![(3.0, Action::Ping)]);
+        assert!(!w.on_input(s(3.5))); // the answer
+        assert_eq!(run(&mut w, 3.6, 6.4, false), vec![]);
+        assert_eq!(run(&mut w, 6.5, 6.6, false), vec![(6.5, Action::Ping)]);
     }
 
     #[test]
     fn lost_device_triggers_resets_until_it_answers() {
         let mut w = Watchdog::new(s(0.0));
-        assert_eq!(w.tick(s(3.0), false), Some(Action::Ping));
-        assert_eq!(w.tick(s(6.0), false), Some(Action::Ping));
-        assert_eq!(w.tick(s(7.0), false), Some(Action::ResetMidi));
+        let got = run(&mut w, 0.0, 11.0, false);
+        // While lost it keeps pinging between resets, to notice the return sooner.
+        let expected = [(3.0, Action::Ping), (6.0, Action::Ping), (7.0, Action::ResetMidi), (10.0, Action::Ping), (11.0, Action::ResetMidi)];
+        assert_eq!(got, expected);
         assert!(w.is_lost());
-        assert_eq!(w.tick(s(9.0), false), None);
-        assert_eq!(w.tick(s(10.0), false), Some(Action::Ping));
-        assert_eq!(w.tick(s(11.0), false), Some(Action::ResetMidi));
-        assert!(w.on_input(s(18.0))); // back: reconnect
+        assert!(w.on_input(s(11.5))); // back: reconnect
         assert!(!w.is_lost());
-        assert!(!w.on_input(s(18.1)));
+        assert!(!w.on_input(s(11.6)));
+    }
+
+    #[test]
+    fn a_frozen_main_loop_is_not_silence() {
+        let mut w = Watchdog::new(s(0.0));
+        assert_eq!(run(&mut w, 0.0, 0.5, false), vec![]);
+        assert_eq!(w.tick(s(30.0), false), None); // Reaper was stuck in a dialog for 30 s
+        assert!(!w.is_lost());
+        // Silence counts again from 30 s: the first ping comes 3 s later.
+        assert_eq!(run(&mut w, 30.1, 33.0, false), vec![(33.0, Action::Ping)]);
     }
 
     #[test]
     fn quiet_pauses_everything() {
         let mut w = Watchdog::new(s(0.0));
-        assert_eq!(w.tick(s(5.0), true), None);
-        assert_eq!(w.tick(s(60.0), true), None);
+        assert_eq!(run(&mut w, 0.0, 60.0, true), vec![]);
         assert!(!w.is_lost());
-        assert_eq!(w.tick(s(62.0), false), None); // silence counts from the end of the quiet time
-        assert_eq!(w.tick(s(63.0), false), Some(Action::Ping));
+        assert_eq!(run(&mut w, 60.1, 63.0, false), vec![(63.0, Action::Ping)]);
     }
 }
