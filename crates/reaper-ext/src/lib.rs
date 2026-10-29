@@ -18,7 +18,7 @@ use std::time::Instant;
 use fragile::Fragile;
 use minilab3_core::protocol::{self, hex, MidiParser, TransportButton};
 use minilab3_core::queue::{Key, OutQueue};
-use minilab3_core::rules::{self, Command, DeviceStatus, State, Track, Transport};
+use minilab3_core::rules::{self, Command, DeviceStatus, Param, State, Track, Transport};
 use reaper_low::raw::MediaTrack;
 use reaper_low::PluginContext;
 use reaper_macros::reaper_extension_plugin;
@@ -139,6 +139,24 @@ impl Api {
         Some((r as u8, g as u8, b as u8))
     }
 
+    /// Parameter `param` of the track's first FX, if it exists.
+    fn knob_param(&self, track: *mut MediaTrack, param: c_int) -> Option<Param> {
+        unsafe {
+            if self.0.TrackFX_GetCount(track) == 0 || param >= self.0.TrackFX_GetNumParams(track, 0) {
+                return None;
+            }
+            let mut name = [0 as c_char; 64];
+            let mut value = [0 as c_char; 64];
+            self.0.TrackFX_GetParamName(track, 0, param, name.as_mut_ptr(), name.len() as c_int);
+            self.0.TrackFX_GetFormattedParamValue(track, 0, param, value.as_mut_ptr(), value.len() as c_int);
+            Some(Param {
+                name: CStr::from_ptr(name.as_ptr()).to_string_lossy().into_owned(),
+                value: CStr::from_ptr(value.as_ptr()).to_string_lossy().into_owned(),
+                normalized: self.0.TrackFX_GetParamNormalized(track, 0, param),
+            })
+        }
+    }
+
     fn command(&self, id: c_int) {
         self.0.Main_OnCommand(id, 0)
     }
@@ -243,6 +261,7 @@ impl Surface {
             selected_volume: selected.map(|t| api.info(t, c"D_VOL")).unwrap_or(1.0),
             selected_armed: selected.is_some_and(|t| api.info(t, c"I_RECARM") == 1.0),
             transport: Transport { playing: play & 1 != 0, recording: play & 4 != 0, repeat },
+            knobs: std::array::from_fn(|i| selected.and_then(|t| api.knob_param(t, i as c_int))),
         }
     }
 
@@ -296,6 +315,11 @@ impl Surface {
                     // Reaper's fader curve: slider 0..1000 -> dB (+6 dB at the top), like its own mixer fader.
                     let db = api.0.SLIDER2DB(v as f64 / 127.0 * 1000.0);
                     api.set_info(t, c"D_VOL", if v == 0 { 0.0 } else { 10f64.powf(db / 20.0) });
+                }
+            }
+            Command::SetKnob(knob, value) => {
+                if let Some(t) = api.selected_track() {
+                    unsafe { api.0.TrackFX_SetParamNormalized(t, 0, knob as c_int, value as f64 / 127.0) };
                 }
             }
             Command::Redraw => self.connect(),
@@ -356,6 +380,14 @@ impl ControlSurface for Surface {
     }
     fn set_track_title(&self, _: reaper_medium::SetTrackTitleArgs) {
         self.dirty.set(true);
+    }
+    fn ext_set_fx_param(&self, _: reaper_medium::ExtSetFxParamArgs) -> i32 {
+        self.dirty.set(true);
+        0
+    }
+    fn ext_set_fx_change(&self, _: reaper_medium::ExtSetFxChangeArgs) -> i32 {
+        self.dirty.set(true);
+        0
     }
 }
 

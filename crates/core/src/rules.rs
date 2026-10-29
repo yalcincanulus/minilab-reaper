@@ -13,6 +13,16 @@ pub struct Track {
     pub color: Option<(u8, u8, u8)>,
 }
 
+/// A parameter on a knob: the selected track's first FX, parameters 1-8.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Param {
+    pub name: String,
+    /// Reaper's formatted value, e.g. "3.0" or "-6.00".
+    pub value: String,
+    /// 0.0..=1.0
+    pub normalized: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Transport {
     pub playing: bool,
@@ -32,6 +42,8 @@ pub struct State {
     pub selected_volume: f64,
     pub selected_armed: bool,
     pub transport: Transport,
+    /// Knobs 1-8; `None` where no parameter is mapped.
+    pub knobs: [Option<Param>; 8],
 }
 
 const DIM: f32 = 0.15;
@@ -92,6 +104,19 @@ pub fn render(state: &State) -> Vec<(Key, Vec<u8>)> {
         out.push((Key::Led(id), protocol::led(id, color)));
     }
 
+    // Knobs: the device keeps a value and a popup text per knob. Realign so the next turn continues from the
+    // parameter's value; the queue drops both while nothing changed.
+    for (i, param) in state.knobs.iter().enumerate() {
+        let cc = protocol::DAW_KNOB_CCS[i];
+        match param {
+            Some(p) => {
+                out.push((Key::Knob(i as u8), protocol::knob_value(i as u8, knob_position(p.normalized))));
+                out.push((Key::Parameter(cc), protocol::parameter(cc, &p.name, &p.value)));
+            }
+            None => out.push((Key::Parameter(cc), protocol::blank_parameter(cc))),
+        }
+    }
+
     let t = &state.transport;
     let transport_leds = [
         (TransportButton::Loop, t.repeat, Rgb { r: 127, g: 50, b: 0 }),
@@ -107,6 +132,10 @@ pub fn render(state: &State) -> Vec<(Key, Vec<u8>)> {
     out
 }
 
+pub fn knob_position(normalized: f64) -> u8 {
+    (normalized.clamp(0.0, 1.0) * 127.0).round() as u8
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     /// Select the track this many places up (-) or down (+), clamped to the track list.
@@ -116,6 +145,8 @@ pub enum Command {
     Transport(TransportButton),
     /// Fader position 0..=127 for the selected track's volume.
     SetVolumeFader(u8),
+    /// Knob index 0-7 and its position 0..=127, for the mapped parameter.
+    SetKnob(u8, u8),
     /// The device switched program or pad bank: it forgot what we drew.
     Redraw,
 }
@@ -127,6 +158,7 @@ pub fn command(event: &Event) -> Option<Command> {
         Event::EncoderClick { pressed: true, shifted: true } => Some(Command::ToggleArm),
         Event::Transport { button, pressed: true } => Some(Command::Transport(button)),
         Event::Fader { index: 0, value, program: Program::Daw } => Some(Command::SetVolumeFader(value)),
+        Event::Knob { index, value, program: Program::Daw } => Some(Command::SetKnob(index, value)),
         Event::Pad { index, bank: PadBank::A, on: true, .. } => Some(Command::SelectTrack(index as usize)),
         _ => None,
     }
@@ -172,6 +204,7 @@ mod tests {
             selected_volume: 1.0,
             selected_armed: true,
             transport: Transport { playing: true, ..Default::default() },
+            knobs: [const { None }; 8],
         }
     }
 
@@ -200,6 +233,19 @@ mod tests {
         assert_eq!(find(&out, Key::Led(0x59)), protocol::led(0x59, Rgb { r: 0, g: 127, b: 0 }));
         let stop_dim = Rgb { r: 127, g: 127, b: 127 }.scaled(TRANSPORT_OFF);
         assert_eq!(find(&out, Key::Led(0x58)), protocol::led(0x58, stop_dim));
+    }
+
+    #[test]
+    fn knobs_realign_and_preload_popups() {
+        let mut s = state();
+        s.knobs[0] = Some(Param { name: "Attack".into(), value: "3.0".into(), normalized: 0.5 });
+        let out = render(&s);
+        assert_eq!(find(&out, Key::Knob(0)), protocol::knob_value(0, 64));
+        assert_eq!(find(&out, Key::Parameter(86)), protocol::parameter(86, "Attack", "3.0"));
+        assert_eq!(find(&out, Key::Parameter(87)), protocol::blank_parameter(87));
+        assert!(!out.iter().any(|(k, _)| *k == Key::Knob(1)));
+        let knob = Event::Knob { index: 0, value: 100, program: Program::Daw };
+        assert_eq!(command(&knob), Some(Command::SetKnob(0, 100)));
     }
 
     #[test]
