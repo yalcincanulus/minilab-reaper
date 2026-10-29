@@ -2,6 +2,7 @@
 //! that turn Reaper's state into screen and LED output and device input into Reaper actions.
 
 pub mod protocol;
+pub mod pickup;
 pub mod queue;
 pub mod rules;
 pub mod watchdog;

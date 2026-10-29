@@ -18,7 +18,8 @@ use std::time::Instant;
 use fragile::Fragile;
 use minilab3_core::protocol::{self, hex, MidiParser, TransportButton};
 use minilab3_core::queue::{Key, OutQueue};
-use minilab3_core::rules::{self, Command, DeviceStatus, Param, State, Track, Transport};
+use minilab3_core::pickup::{Move, Pickup};
+use minilab3_core::rules::{self, Command, DeviceStatus, FaderTarget, Param, State, Track, Transport};
 use minilab3_core::watchdog::{self, Watchdog};
 use reaper_low::raw::{midi_Output, MediaTrack, MIDI_event_t};
 use reaper_low::PluginContext;
@@ -209,6 +210,62 @@ impl Api {
         }
     }
 
+    /// Reaper's fader curve (slider 0..1000, +6 dB at the top), as a MiniLab fader position 0..=127.
+    fn volume_position(&self, volume: f64) -> u8 {
+        if volume < 1e-7 {
+            return 0;
+        }
+        (self.0.DB2SLIDER(20.0 * volume.log10()) / 1000.0 * 127.0).round().clamp(0.0, 127.0) as u8
+    }
+
+    fn position_volume(&self, position: u8) -> f64 {
+        if position == 0 {
+            return 0.0;
+        }
+        10f64.powf(self.0.SLIDER2DB(position as f64 / 127.0 * 1000.0) / 20.0)
+    }
+
+    /// Fader 1 volume, 2 send 1, 3 send 2, 4 pan of `track`.
+    fn fader_target(&self, track: *mut MediaTrack, fader: usize) -> Option<FaderTarget> {
+        let target = |name: String, value: String, position| FaderTarget { name, value, position, waiting: None };
+        match fader {
+            0 => {
+                let v = self.info(track, c"D_VOL");
+                Some(target("Volume".into(), rules::volume_text(v), self.volume_position(v)))
+            }
+            1 | 2 => {
+                let send = fader as c_int - 1;
+                if send >= unsafe { self.0.GetTrackNumSends(track, 0) } {
+                    return None;
+                }
+                let v = unsafe { self.0.GetTrackSendInfo_Value(track, 0, send, c"D_VOL".as_ptr()) };
+                Some(target(format!("Send {fader}"), rules::volume_text(v), self.volume_position(v)))
+            }
+            3 => {
+                let pan = self.info(track, c"D_PAN");
+                let position = ((pan + 1.0) / 2.0 * 127.0).round().clamp(0.0, 127.0) as u8;
+                Some(target("Pan".into(), rules::pan_text(pan), position))
+            }
+            _ => None,
+        }
+    }
+
+    fn set_fader(&self, track: *mut MediaTrack, fader: usize, position: u8) {
+        match fader {
+            0 => self.set_info(track, c"D_VOL", self.position_volume(position)),
+            1 | 2 => unsafe {
+                let v = self.position_volume(position);
+                self.0.SetTrackSendInfo_Value(track, 0, fader as c_int - 1, c"D_VOL".as_ptr(), v);
+            },
+            3 => {
+                let pan = position as f64 / 127.0 * 2.0 - 1.0;
+                // 64 is not exactly the middle of 0..127: snap to center.
+                self.set_info(track, c"D_PAN", if pan.abs() < 0.02 { 0.0 } else { pan });
+            }
+            _ => {}
+        }
+    }
+
     fn command(&self, id: c_int) {
         self.0.Main_OnCommand(id, 0)
     }
@@ -236,6 +293,11 @@ struct Surface {
     started: Instant,
     last_device_scan: Option<Instant>,
     watchdog: Watchdog,
+    pickup: Pickup,
+    /// Per fader: `Some(up)` after a move that did not catch the value yet.
+    fader_waiting: [Option<bool>; 4],
+    /// The selected track at the last redraw, to release the faders when it changes.
+    faders_track: Option<*mut MediaTrack>,
     log: Option<File>,
 }
 
@@ -262,6 +324,9 @@ impl Surface {
             started: Instant::now(),
             last_device_scan: None,
             watchdog: Watchdog::default(),
+            pickup: Pickup::default(),
+            fader_waiting: [None; 4],
+            faders_track: None,
             log,
         };
         s.log("loaded");
@@ -329,6 +394,11 @@ impl Surface {
             selected_armed: selected.is_some_and(|t| api.info(t, c"I_RECARM") == 1.0),
             transport: Transport { playing: play & 1 != 0, recording: play & 4 != 0, repeat },
             knobs: std::array::from_fn(|i| selected.and_then(|t| api.knob_param(t, i as c_int))),
+            faders: std::array::from_fn(|i| {
+                let mut f = selected.and_then(|t| api.fader_target(t, i))?;
+                f.waiting = self.fader_waiting[i];
+                Some(f)
+            }),
         }
     }
 
@@ -384,11 +454,16 @@ impl Surface {
                 TransportButton::Record => 1013, // Transport: Record
                 TransportButton::Tap => 1134,    // Transport: Tap tempo
             }),
-            Command::SetVolumeFader(v) => {
-                if let Some(t) = api.selected_track() {
-                    // Reaper's fader curve: slider 0..1000 -> dB (+6 dB at the top), like its own mixer fader.
-                    let db = api.0.SLIDER2DB(v as f64 / 127.0 * 1000.0);
-                    api.set_info(t, c"D_VOL", if v == 0 { 0.0 } else { 10f64.powf(db / 20.0) });
+            Command::MoveFader(fader, position) => {
+                let fader = fader as usize;
+                if let Some((t, target)) = api.selected_track().and_then(|t| Some((t, api.fader_target(t, fader)?))) {
+                    match self.pickup.on_move(fader, position, target.position) {
+                        Move::Apply(p) => {
+                            self.fader_waiting[fader] = None;
+                            self.api.set_fader(t, fader, p);
+                        }
+                        Move::Waiting { up } => self.fader_waiting[fader] = Some(up),
+                    }
                 }
             }
             Command::SetKnob(knob, value) => {
@@ -399,6 +474,20 @@ impl Surface {
             Command::Redraw => self.connect(),
         }
         self.dirty.set(true);
+    }
+
+    /// Release the faders when the selected track changed, or when a value moved elsewhere (pickup).
+    fn sync_faders(&mut self) {
+        let selected = self.api.selected_track();
+        if selected != self.faders_track {
+            self.faders_track = selected;
+            self.pickup.release_all();
+            self.fader_waiting = [None; 4];
+        }
+        for i in 0..4 {
+            let target = selected.and_then(|t| self.api.fader_target(t, i)).map(|f| f.position);
+            self.pickup.sync(i, target);
+        }
     }
 
     fn select(&self, index: usize) {
@@ -447,6 +536,9 @@ impl ControlSurface for Surface {
             },
             None => {}
         }
+        if self.dirty.get() {
+            self.sync_faders();
+        }
         if self.dirty.replace(false) {
             for (key, msg) in rules::render(&self.state()) {
                 self.queue.push(key, msg);
@@ -460,6 +552,13 @@ impl ControlSurface for Surface {
     }
     fn set_surface_volume(&self, _: reaper_medium::SetSurfaceVolumeArgs) {
         self.dirty.set(true);
+    }
+    fn set_surface_pan(&self, _: reaper_medium::SetSurfacePanArgs) {
+        self.dirty.set(true);
+    }
+    fn ext_set_send_volume(&self, _: reaper_medium::ExtSetSendVolumeArgs) -> i32 {
+        self.dirty.set(true);
+        0
     }
     fn set_surface_selected(&self, _: reaper_medium::SetSurfaceSelectedArgs) {
         self.dirty.set(true);

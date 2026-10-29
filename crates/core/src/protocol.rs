@@ -64,6 +64,7 @@ const DAW: CcMap = CcMap {
 };
 
 pub const DAW_KNOB_CCS: [u8; 8] = DAW.knobs;
+pub const DAW_FADER_CCS: [u8; 4] = DAW.faders;
 pub const MOD_CC: u8 = 1;
 /// 0-based, i.e. MIDI channel 10.
 pub const PAD_CHANNEL: u8 = 9;

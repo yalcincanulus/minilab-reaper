@@ -23,6 +23,17 @@ pub struct Param {
     pub normalized: f64,
 }
 
+/// What a fader controls: 1 volume, 2 send 1, 3 send 2, 4 pan of the selected track.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FaderTarget {
+    pub name: String,
+    pub value: String,
+    /// Where the value is, as a fader position 0..=127 (for pickup).
+    pub position: u8,
+    /// `Some(up)` while the fader has not caught the value yet: which way to move it.
+    pub waiting: Option<bool>,
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Transport {
     pub playing: bool,
@@ -44,6 +55,8 @@ pub struct State {
     pub transport: Transport,
     /// Knobs 1-8; `None` where no parameter is mapped.
     pub knobs: [Option<Param>; 8],
+    /// Faders 1-4; `None` where there is nothing to control (no such send).
+    pub faders: [Option<FaderTarget>; 4],
 }
 
 const DIM: f32 = 0.15;
@@ -58,6 +71,16 @@ pub fn volume_text(volume: f64) -> String {
         let db = 20.0 * volume.log10();
         // Avoid "-0.0".
         format!("{:.1} dB", if db.abs() < 0.05 { 0.0 } else { db })
+    }
+}
+
+/// Pan -1.0 (left) ..= 1.0 (right) as text: "Center", "25% L", "100% R".
+pub fn pan_text(pan: f64) -> String {
+    let pct = (pan.abs() * 100.0).round();
+    if pct < 1.0 {
+        "Center".into()
+    } else {
+        format!("{pct:.0}% {}", if pan < 0.0 { "L" } else { "R" })
     }
 }
 
@@ -117,6 +140,22 @@ pub fn render(state: &State) -> Vec<(Key, Vec<u8>)> {
         }
     }
 
+    // Faders: the device shows the popup while a fader moves. Before pickup, the value says which way to go.
+    for (i, target) in state.faders.iter().enumerate() {
+        let cc = protocol::DAW_FADER_CCS[i];
+        match target {
+            Some(f) => {
+                let value = match f.waiting {
+                    Some(true) => format!("{} (up)", f.value),
+                    Some(false) => format!("{} (down)", f.value),
+                    None => f.value.clone(),
+                };
+                out.push((Key::Parameter(cc), protocol::parameter(cc, &f.name, &value)));
+            }
+            None => out.push((Key::Parameter(cc), protocol::blank_parameter(cc))),
+        }
+    }
+
     let t = &state.transport;
     let transport_leds = [
         (TransportButton::Loop, t.repeat, Rgb { r: 127, g: 50, b: 0 }),
@@ -143,8 +182,8 @@ pub enum Command {
     SelectTrack(usize),
     ToggleArm,
     Transport(TransportButton),
-    /// Fader position 0..=127 for the selected track's volume.
-    SetVolumeFader(u8),
+    /// Fader index 0-3 moved to this position 0..=127. Pickup decides whether it applies.
+    MoveFader(u8, u8),
     /// Knob index 0-7 and its position 0..=127, for the mapped parameter.
     SetKnob(u8, u8),
     /// The device switched program or pad bank: it forgot what we drew.
@@ -157,7 +196,7 @@ pub fn command(event: &Event) -> Option<Command> {
         Event::Encoder { delta, shifted: true } => Some(Command::SelectTrackBy(delta as i32)),
         Event::EncoderClick { pressed: true, shifted: true } => Some(Command::ToggleArm),
         Event::Transport { button, pressed: true } => Some(Command::Transport(button)),
-        Event::Fader { index: 0, value, program: Program::Daw } => Some(Command::SetVolumeFader(value)),
+        Event::Fader { index, value, program: Program::Daw } => Some(Command::MoveFader(index, value)),
         Event::Knob { index, value, program: Program::Daw } => Some(Command::SetKnob(index, value)),
         Event::Pad { index, bank: PadBank::A, on: true, .. } => Some(Command::SelectTrack(index as usize)),
         _ => None,
@@ -205,6 +244,7 @@ mod tests {
             selected_armed: true,
             transport: Transport { playing: true, ..Default::default() },
             knobs: [const { None }; 8],
+            faders: [const { None }; 4],
         }
     }
 
@@ -249,9 +289,30 @@ mod tests {
     }
 
     #[test]
+    fn fader_popups_and_pickup_hint() {
+        let mut s = state();
+        s.faders[0] = Some(FaderTarget { name: "Volume".into(), value: "-4.1 dB".into(), position: 90, waiting: None });
+        s.faders[3] = Some(FaderTarget { name: "Pan".into(), value: "Center".into(), position: 64, waiting: Some(true) });
+        let out = render(&s);
+        assert_eq!(find(&out, Key::Parameter(14)), protocol::parameter(14, "Volume", "-4.1 dB"));
+        assert_eq!(find(&out, Key::Parameter(15)), protocol::blank_parameter(15));
+        assert_eq!(find(&out, Key::Parameter(31)), protocol::parameter(31, "Pan", "Center (up)"));
+        let fader = Event::Fader { index: 2, value: 10, program: Program::Daw };
+        assert_eq!(command(&fader), Some(Command::MoveFader(2, 10)));
+    }
+
+    #[test]
     fn empty_project() {
         let out = render(&State::default());
         assert_eq!(find(&out, Key::Screen), protocol::screen("No tracks", "", Icons::default()));
+    }
+
+    #[test]
+    fn pan_text_formats() {
+        assert_eq!(pan_text(0.0), "Center");
+        assert_eq!(pan_text(0.004), "Center");
+        assert_eq!(pan_text(-0.25), "25% L");
+        assert_eq!(pan_text(1.0), "100% R");
     }
 
     #[test]
