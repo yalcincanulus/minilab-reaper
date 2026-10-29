@@ -29,7 +29,8 @@ MiniLab screen and detects each action over MIDI works well: the user can't see 
 - `tools/phone-shot.sh`: Galaxy M31 over adb, camera app in Pro mode. Reads the screen text and sees Shift, Hold,
   Oct and knob 1. `--ui` saves the phone's own screen when a shot fails.
 - `tools/cam-shot.sh`: webcam, side view of the pads, faders and knobs. Pad colours, no text.
-- `tools/ml3.py`: send connect, LEDs, screen, raw SysEx; listen to the device.
+- `tools/ml3.py`: send connect, LEDs, screen, raw SysEx; listen to the device. While Reaper runs, PipeWire's MIDI
+  bridge holds the raw port, and ml3.py falls back to the ALSA sequencer (`aseqsend`, `aseqdump`) by itself.
 - Check output on the cameras yourself rather than asking the user. Take shots with hands clear of the device: a
   hand on knob 1 covers half the screen.
 
@@ -40,7 +41,17 @@ MiniLab screen and detects each action over MIDI works well: the user can't see 
   key). Bursts with no gap lose messages.
 - The device keeps Shift + pads 1–3 (Arp, Pad bank, Prog) for itself. Shift + pads 4–8 are transport: their LEDs
   are verified, which pads send CC 105–109 is still open.
-- `amidi` and `ml3.py` need the `Minilab3 MIDI` port free.
+
+## Driving Reaper
+
+- `tools/reaper.sh start | run script.lua | shot | quit [--discard]`. `run` executes a ReaScript inside the running
+  Reaper; scripts report by writing a file. `shot` captures only Reaper's window (the user has two screens; their
+  desktop stays private).
+- Reaper's MIDI goes through PipeWire's JACK bridge: ports are named `Midi-Bridge:Minilab3: MIDI ...`. MIDI input
+  device 1 and output device 1 are the MiniLab (`midiins=2`, `midiouts=2` bitmasks in `reaper.ini`).
+- `reaper.ini` changes only stick while Reaper is closed: Reaper rewrites it on exit.
+- `reaper/test.RPP`: the test project (Lead, Bass, Drums, Keys, Vocals; Reaper's own plugins; synth tracks take
+  MiniLab input).
 
 ## Code
 
