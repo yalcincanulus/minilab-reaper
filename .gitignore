@@ -2,3 +2,4 @@
 *.RPP-bak
 *.reapeaks
 target/
+reaper/Media/

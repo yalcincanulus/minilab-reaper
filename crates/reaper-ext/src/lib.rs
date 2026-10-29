@@ -5,13 +5,13 @@
 //!
 //! Reaper calls `run()` about 30 times per second on the main thread, and the `set_*` callbacks on changes.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::error::Error;
 use std::ffi::{c_char, c_int, CStr};
 use std::fmt;
 use std::fs::File;
 use std::io::Write;
-use std::ptr::null_mut;
+use std::ptr::{null_mut, NonNull};
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -20,7 +20,7 @@ use minilab3_core::protocol::{self, hex, MidiParser, TransportButton};
 use minilab3_core::queue::{Key, OutQueue};
 use minilab3_core::rules::{self, Command, DeviceStatus, Param, State, Track, Transport};
 use minilab3_core::watchdog::{self, Watchdog};
-use reaper_low::raw::MediaTrack;
+use reaper_low::raw::{midi_Output, MediaTrack, MIDI_event_t};
 use reaper_low::PluginContext;
 use reaper_macros::reaper_extension_plugin;
 use reaper_medium::{ControlSurface, ReaperSession};
@@ -35,12 +35,67 @@ fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
     let mut session = ReaperSession::load(context);
     let surface = Surface::new(*session.reaper().low());
     session.plugin_register_add_csurf_inst(Box::new(surface))?;
+    session.plugin_register_add_at_exit(at_exit)?;
     let _ = SESSION.set(Fragile::new(session));
     Ok(())
 }
 
 /// Keeps the session (and so the registered surface) alive while Reaper runs.
 static SESSION: OnceLock<Fragile<ReaperSession>> = OnceLock::new();
+
+thread_local! {
+    /// The MiniLab's output, opened by the extension (main thread only). Kept here so [`at_exit`] can reach it:
+    /// Reaper never drops the surface.
+    static OUTPUT: RefCell<Option<Output>> = const { RefCell::new(None) };
+}
+
+/// Reaper is quitting: give the device back its own LEDs and screen.
+extern "C" fn at_exit() {
+    OUTPUT.with_borrow_mut(|out| {
+        if let Some(out) = out.take() {
+            out.send(&protocol::disconnect());
+            // Sending only queues it on Reaper's MIDI path (JACK here): give it time to go out before shutdown
+            // continues. Without the wait, the device kept showing the last track (tested 2026-10-29).
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            if let Some(session) = SESSION.get() {
+                let path = format!("{}/{LOG_FILE}", Api(*session.get().reaper().low()).resource_path());
+                if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(path) {
+                    let _ = writeln!(f, "at_exit: disconnect sent, waited 300 ms");
+                }
+            }
+        }
+    });
+}
+
+/// A MIDI output the extension opens itself, instead of sharing the device through Reaper's MIDI preferences
+/// (where it must be off). Messages go out right away, so the disconnect at exit arrives; with
+/// `SendMIDIMessageToHardware` it only queued, and Reaper's MIDI thread has stopped by then.
+struct Output(NonNull<midi_Output>);
+
+impl Output {
+    fn open(api: &Api, dev: c_int) -> Option<Output> {
+        NonNull::new(unsafe { api.0.CreateMIDIOutput(dev, false, null_mut()) }).map(Output)
+    }
+
+    fn send(&self, msg: &[u8]) {
+        // MIDI_event_t is frame_offset, size, then the bytes; C++ lets them run past the declared 4-byte array.
+        // u32 storage keeps it aligned like the struct.
+        let mut buf = vec![0u32; (8 + msg.len()).div_ceil(4)];
+        let bytes = buf.as_mut_ptr() as *mut u8;
+        unsafe {
+            *(bytes as *mut i32) = 0;
+            *(bytes.add(4) as *mut i32) = msg.len() as i32;
+            std::ptr::copy_nonoverlapping(msg.as_ptr(), bytes.add(8), msg.len());
+            self.0.as_ref().SendMsg(bytes as *mut MIDI_event_t, -1);
+        }
+    }
+}
+
+impl Drop for Output {
+    fn drop(&mut self) {
+        unsafe { reaper_low::delete_midi_output(self.0) };
+    }
+}
 
 /// Small safe wrappers over the C API. All calls happen on Reaper's main thread.
 struct Api(reaper_low::Reaper);
@@ -57,10 +112,6 @@ impl Api {
             };
             ok && CStr::from_ptr(buf.as_ptr()).to_string_lossy().contains(DEVICE_NAME)
         })
-    }
-
-    fn send_midi(&self, output: c_int, msg: &[u8]) {
-        unsafe { self.0.SendMIDIMessageToHardware(output, msg.as_ptr() as *const c_char, msg.len() as c_int) }
     }
 
     /// Input events newer than `after`, oldest first, as (index, device, bytes).
@@ -237,12 +288,19 @@ impl Surface {
         self.in_dev = self.api.find_device(false);
         let (o, i) = (self.out_dev, self.in_dev);
         self.log(format!("devices: out {o:?} in {i:?}"));
-        if o.is_some() && i.is_some() {
+        if let (Some(o), Some(_)) = (o, i) {
+            self.open_output(o);
             self.connect();
             true
         } else {
             false
         }
+    }
+
+    fn open_output(&mut self, dev: c_int) {
+        let out = Output::open(&self.api, dev);
+        self.log(format!("output {dev}: {}", if out.is_some() { "open" } else { "could not open" }));
+        OUTPUT.set(out);
     }
 
     fn connect(&mut self) {
@@ -353,11 +411,14 @@ impl Surface {
     }
 
     fn flush(&mut self) {
-        let Some(out) = self.out_dev else { return };
         let batch = self.queue.drain_batch(self.started.elapsed(), MAX_PER_TICK);
-        for m in batch {
-            self.api.send_midi(out, &m);
-            self.log(format!("out {}", hex(&m)));
+        let sent = OUTPUT.with_borrow(|out| {
+            let Some(out) = out else { return false };
+            batch.iter().for_each(|m| out.send(m));
+            true
+        });
+        if sent {
+            batch.iter().for_each(|m| self.log(format!("out {}", hex(m))));
         }
     }
 }
@@ -375,8 +436,13 @@ impl ControlSurface for Surface {
                 // Resetting while it is unplugged makes Reaper show a blocking "could not open" dialog.
                 Some(false) => self.log("device silent and not plugged in: waiting"),
                 _ => {
+                    // Our own output is not part of Reaper's reset: close it first, open it again after.
                     self.log("device silent: Reset all MIDI devices");
+                    OUTPUT.set(None);
                     self.api.command(41175);
+                    if let Some(dev) = self.out_dev {
+                        self.open_output(dev);
+                    }
                 }
             },
             None => {}

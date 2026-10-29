@@ -50,7 +50,9 @@ MiniLab screen and detects each action over MIDI works well: the user can't see 
   `run` executes a ReaScript inside the running Reaper; scripts report by writing a file. `shot` captures only Reaper's window (the user has two screens; their
   desktop stays private).
 - Reaper's MIDI goes through PipeWire's JACK bridge: ports are named `Midi-Bridge:Minilab3: MIDI ...`. MIDI input
-  device 1 and output device 1 are the MiniLab (`midiins=2`, `midiouts=2` bitmasks in `reaper.ini`).
+  device 1 is the MiniLab (`midiins=2` in `reaper.ini`). Its output is off in Reaper's preferences (`midiouts=0`):
+  the extension opens it itself (`CreateMIDIOutput`), so its disconnect at exit gets out. The Lua spike sends
+  through Reaper's outputs, so it needs `midiouts=2` again.
 - `tools/fake-input.sh link | send <hex> | unlink`: fake MiniLab input. Reaper sees messages sent to Midi Through
   as coming from the MiniLab, so input features can be tested without the user.
 - `reaper.ini` changes only stick while Reaper is closed: Reaper rewrites it on exit.
