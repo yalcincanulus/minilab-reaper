@@ -34,7 +34,8 @@ Channels are 1-based here.
 | Pads bank B | Notes 44–51, ch 10 | same | verified |
 | Pitch strip | Pitch bend | same | verified |
 | Mod strip | CC 1 | same | verified |
-| Shift + loop/stop/play/rec/tap | CC 105–109 | same | verified |
+| Shift + loop/stop/play/rec/tap | CC 105–109, from Shift + pads 4–8; value = press strength (a light tap sent 37), 0 on release | same | verified 2026-10-29 |
+| Shift + pads 1–3 | Nothing: Arp on/off, pad bank A/B (status SysEx), program Arturia/DAW (status SysEx) | same | verified 2026-10-29 |
 
 - The two programs' CC numbers do not overlap, so one decoder handles both.
 - Relative encoder: value > 64 = clockwise, < 64 = counter-clockwise. A 64 "rest" value comes between steps; ignore it.
@@ -57,7 +58,7 @@ Status SysEx from the device (`F0 00 20 6B 7F 42 …` header):
 | Request program | `01 00 40 01` | verified 2026-10-29: reply `02 00 40 01 <p>`, p = 1 in the DAW program, 0 in the Arturia program (verified both) |
 | LED colour | `02 02 16 <id> <r> <g> <b>` (0–127 each) | verified |
 | Screen, persistent | `04 02 60 1F 07 01 <icon> <arm> <arp> 00 01 <line1> 00 02 <line2> 00` | verified. Line lengths: see below |
-| Screen, parameter popup | `04 02 60 1F 08 02 <cc> 00 01 <name> 00 02 <value> 00` | script. Partly seen. Sent alone (even every 200 ms), nothing shows. Sent before turning knob 1: the photos taken while turning showed the right half of the screen dark, most likely the user's hand (knob 1 is right of the screen in the phone's view). Inconclusive. Ableton sends it whenever the parameter's name or value changes. To film while turning |
+| Screen, parameter popup | `04 02 60 1F 08 02 <cc> 00 01 <name> 00 02 <value> 00` | verified 2026-10-29: the device stores name and value per control and shows them only while that control moves: a round knob graphic, the name and the value (e.g. "Attack / 4685.0"). Sent alone it shows nothing. Send it whenever the mapped parameter changes |
 | Knob value realign | `21 10 00 <7..14> 00 <value>` | verified 2026-10-29: realign knob 1 to 100, the next turn sent 101; to 10, it sent 11 |
 | Blank parameter | `04 02 60 1F 09 02 <cc> 00` | script (Ableton: control not mapped) |
 
