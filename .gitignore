@@ -3,3 +3,4 @@
 *.reapeaks
 target/
 reaper/Media/
+reaper/Backups/
