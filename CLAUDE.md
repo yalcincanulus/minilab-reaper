@@ -20,9 +20,10 @@ it may not work out.
 New to DAWs: has followed a few Reaper tutorials, no real projects. Explain Reaper terms briefly. For workflow
 choices (what pads bank A or the encoder do), propose a default they can try in Reaper.
 
-The MiniLab and the phone sit on the floor, so a physical action costs the user a trip. Do everything possible over
-MIDI and adb first, and batch the hands-on steps into one request. A guided run that shows the instructions on the
-MiniLab screen and detects each action over MIDI works well: the user can't see the terminal from there.
+The MiniLab is on the user's desk; the cameras are down (see "Setup now" in the roadmap). Test with the extension
+log, Reaper screenshots and fake input first, then ask the user to try or look. Batch hands-on steps into one
+request. If the cameras go back up (MiniLab on the floor): a guided run that shows instructions on the MiniLab
+screen and detects each action over MIDI works well, and flashing the Oct LEDs green confirms each step.
 
 ## Eyes on the device
 
@@ -31,7 +32,7 @@ MiniLab screen and detects each action over MIDI works well: the user can't see 
 - `tools/cam-shot.sh`: webcam, side view of the pads, faders and knobs. Pad colours, no text.
 - `tools/ml3.py`: send connect, LEDs, screen, raw SysEx; listen to the device. While Reaper runs, PipeWire's MIDI
   bridge holds the raw port, and ml3.py falls back to the ALSA sequencer (`aseqsend`, `aseqdump`) by itself.
-- Check output on the cameras yourself rather than asking the user. Take shots with hands clear of the device: a
+- When the cameras are up, check output on them yourself rather than asking the user. Take shots with hands clear of the device: a
   hand on knob 1 covers half the screen.
 
 ## Device rules
