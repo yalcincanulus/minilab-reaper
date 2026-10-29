@@ -4,3 +4,4 @@
 pub mod protocol;
 pub mod queue;
 pub mod rules;
+pub mod watchdog;

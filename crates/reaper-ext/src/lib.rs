@@ -19,6 +19,7 @@ use fragile::Fragile;
 use minilab3_core::protocol::{self, hex, MidiParser, TransportButton};
 use minilab3_core::queue::{Key, OutQueue};
 use minilab3_core::rules::{self, Command, DeviceStatus, Param, State, Track, Transport};
+use minilab3_core::watchdog::{self, Watchdog};
 use reaper_low::raw::MediaTrack;
 use reaper_low::PluginContext;
 use reaper_macros::reaper_extension_plugin;
@@ -177,6 +178,7 @@ struct Surface {
     dirty: Cell<bool>,
     started: Instant,
     last_device_scan: Option<Instant>,
+    watchdog: Watchdog,
     log: Option<File>,
 }
 
@@ -202,6 +204,7 @@ impl Surface {
             dirty: Cell::new(true),
             started: Instant::now(),
             last_device_scan: None,
+            watchdog: Watchdog::default(),
             log,
         };
         s.log("loaded");
@@ -272,12 +275,19 @@ impl Surface {
             if Some(dev) != self.in_dev {
                 continue;
             }
+            if self.watchdog.on_input(self.started.elapsed()) {
+                self.log("device is back: connect and redraw");
+                self.connect();
+            }
             let mut messages = Vec::new();
             self.parser.push(&bytes, |m| messages.push(m.to_vec()));
             for m in messages {
                 let Some(event) = protocol::decode(&m) else { continue };
-                self.log(format!("in  {} {event:?}", hex(&m)));
                 let cmd = self.status.update(&event).or_else(|| rules::command(&event));
+                // Watchdog pings get a program reply every few seconds: log those only when something changes.
+                if cmd.is_some() || !matches!(event, protocol::Event::Program(_)) {
+                    self.log(format!("in  {} {event:?}", hex(&m)));
+                }
                 if let Some(cmd) = cmd {
                     self.run_command(cmd);
                 }
@@ -352,6 +362,15 @@ impl ControlSurface for Surface {
             return;
         }
         self.read_input();
+        let recording = self.api.0.GetPlayState() & 4 != 0;
+        match self.watchdog.tick(self.started.elapsed(), recording) {
+            Some(watchdog::Action::Ping) => self.queue.push(Key::Once, protocol::request_program()),
+            Some(watchdog::Action::ResetMidi) => {
+                self.log("device silent: Reset all MIDI devices");
+                self.api.command(41175);
+            }
+            None => {}
+        }
         if self.dirty.replace(false) {
             for (key, msg) in rules::render(&self.state()) {
                 self.queue.push(key, msg);
