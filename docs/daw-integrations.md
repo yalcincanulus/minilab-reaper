@@ -1,95 +1,94 @@
 # What Arturia's DAW integrations do
 
-What the MiniLab 3 does in each DAW Arturia supports, to decide what the Reaper extension should match. Sources:
-Arturia's integration guides, v1.0 (`https://dl.arturia.net/products/minilab-3/daw-integration-guide/MiniLab_3_<DAW>_Daw_Integration_Guide_1_0_EN.pdf`
-for `Live`, `Bitwig_Studio`, `FL_Studio`, `Logic_Pro`, `Reason`, `Cubase`; read 2026-10-29), and Ableton's decompiled
-script (`docs/minilab3-protocol.md`). All of them need the DAW program (Shift + Pad 3).
+What the MiniLab 3 does in each DAW Arturia supports. How Reaper with this extension compares:
+`docs/daw-comparison.md`.
 
-The guides are short and partly copy-pasted between DAWs: Bitwig's "Shift + click: switch between Channel Rack and
-Browser" is FL Studio's text, and Live's transport section repeats a sentence about scene colours. Where a guide
-and Ableton's script disagree, the script wins (it is what runs).
+All integrations need the MiniLab in its DAW program (Shift + Pad 3).
+
+## Sources
+
+- **Arturia's integration guides 1.0** for Live, Bitwig Studio, FL Studio, Logic Pro, Reason and Cubase:
+  `https://www.arturia.com/api/download/products/minilab-3/daw-integration-guide/MiniLab_3_<DAW>_Daw_Integration_Guide_1_0_EN.pdf`
+  with `Live`, `Bitwig_Studio`, `FL_Studio`, `Logic_Pro`, `Reason`, `Cubase`.
+- **The integration scripts**, from the same resources page
+  (`https://www.arturia.com/products/hybrid-synths/minilab-3/resources`):
+  - FL Studio 1.0.1: Python.
+  - Cubase 1.0.1: MIDI Remote JavaScript, inside a zlib-compressed `.midiremote` file.
+  - Reason 1.0: a Lua codec and a remote map.
+  - Logic Pro 1.0: `config.lua`.
+  - Bitwig Studio 1.1 (2026-06-26): a Java `.bwextension`, with Bitwig's own MiniLab 3 manual inside.
+  - Ableton Live: Ableton's script, decompiled (see `docs/minilab3-protocol.md`).
+
+The guides are short and partly copied between DAWs: Bitwig's 1.0 guide gives Shift + click the FL Studio text
+("switch between Channel Rack and Browser"). Where a guide and a script disagree, this page follows the script,
+because it is what runs. Bitwig is described as of 1.1, from the manual in the extension.
 
 ## By control
 
-| Control | Live | Bitwig | FL Studio | Logic Pro | Reason | Cubase |
+| Control | Live | Bitwig 1.1 | FL Studio | Logic Pro | Reason | Cubase |
 |---|---|---|---|---|---|---|
-| Encoder turn | Scenes (Session); timeline (Arrangement) | Scenes | Channel Rack / Browser items | **Tracks** | **Tracks** | **Tracks** |
-| Encoder click | Launch scene; play (Arrangement) | Launch scene | Show/close plugin; select (Browser) | **Show/close plugin** | Toggle preset / track selection | **Show/close plugin** |
-| Click + turn | – | **Plugin parameter pages** | – | – | – | – |
-| Shift + turn | **Tracks** | **Tracks** | Next/prev preset (plugin); fast forward / rewind | **Fast forward / rewind** | **Timeline** | **Fast forward / rewind** |
-| Shift + click | **Arm track** | (Channel Rack / Browser: likely copied text) | Channel Rack / Browser | Show/close library | – | Device mode / Mixer mode |
-| Knobs 1–8 | Focused plugin's parameters | Focused plugin, paged | Focused plugin | Focused plugin | Focused plugin, or mixer channel | Focused plugin, or **8 track volumes** (Mixer mode) |
-| Faders 1–4 | Volume, send A, send B, pan | Volume, sends, pan | Plugin parameters; else 1 volume, 4 pan | Volume, sends, pan | Plugin, or volume/sends/pan (mixer) | Volume, send 1, send 2, pan ("scaled" takeover; script, 2026-10-30) |
-| Pads bank A | Clip launch, clip colours | Clip launch, clip colours | Drum notes (FPC layout) | Drum notes | Drum notes | Drum notes |
-| Pads bank B | Drum Rack, each pad in its sound's colour | Drum notes, drum colours, light on playback | Drum notes (FPC layout) | Drum notes | Drum notes | Drum notes |
-| Shift + pads 4–8 | Loop, play/pause, stop, record, tap | same | same | same | same | same |
+| Encoder turn | Scenes (Session view); timeline (Arrangement view) | Scenes (bank A); pad note range (bank B) | Channel Rack / Browser items | **Tracks** | **Tracks** | **Tracks** |
+| Encoder click | Launch scene; play (Arrangement view) | Launch scene | Show/close plugin; select (Browser) | **Show/close plugin** | Preset / track selection | **Show/close plugin** |
+| Click + turn | – | **Device parameter pages** | – | – | – | – |
+| Shift + turn | **Tracks** | **Tracks** | Next/previous preset; fast forward / rewind | **Fast forward / rewind** | **Timeline** | **Fast forward / rewind** |
+| Shift + click | **Arm track** | Preset browser (Shift + long press: insert a device) | Channel Rack / Browser | Show/close library | – | Device mode / Mixer mode |
+| Knobs 1–8 | Focused plugin | Focused device's remote controls, paged | Focused plugin | Focused plugin | Focused device, or mixer channel | Focused plugin, or **8 track volumes** (Mixer mode) |
+| Faders 1–4 | Volume, send A, send B, pan | Volume, send 1, send 2, pan | Plugin parameters; else 1 volume, 4 pan | Volume, sends, pan | Plugin, or volume/sends/pan (mixer) | Volume, send 1, send 2, pan, with "scaled" takeover |
+| Pads bank A | Clip launch | Clip launch | Drum notes (FPC layout) | Drum notes | Drum notes | Drum notes |
+| Pads bank B | Drum Rack notes | Drum notes | Drum notes (FPC layout) | Drum notes | Drum notes | Drum notes |
+| Shift + pads 4–8 | Loop, stop, play/pause, record, tap tempo | Same | Same | Same | Same | Same |
 
-Feedback everywhere: the screen shows names (track, scene, parameter name and value, the timeline position); the
-arm icon in Live; transport pads lit full when on and dim when off (guides: 33%; Ableton's script: 20 of 127,
-about 16%), play and record **blink** while playing or recording (all but Cubase).
+"Scaled" takeover (Cubase): after the value changed elsewhere, a fader moves it in proportion until fader and
+value meet, so the value doesn't jump.
 
-Ableton's script also shows short notifications for about 1 s: "Live 12 / Connected" at start, "Tap Tempo /
-120 BPM", "Loop Mode / ON", and the time while moving the arrangement position.
+## Screen and lights
 
-## Pads in detail (from Arturia's scripts, read 2026-10-30)
+- The screen shows names: track, scene, parameter name and value, the timeline position.
+- Live shows the arm icon.
+- Transport pads (Shift + pads 4–8) are lit full when on and dim when off. The guides say 33%; Ableton's script
+  uses 20 of 127, about 16%.
+- Play and record **blink** while playing or recording, in all but Cubase.
+- Ableton's script shows short messages for about 1 s: "Live 12 / Connected" at start, "Tap Tempo / 120 BPM",
+  "Loop Mode / ON", and the time while moving through the arrangement. Reason's script shows "Loop Mode" too.
 
-The guides leave the pads out for Logic, Cubase and Reason. The scripts themselves are on Arturia's MiniLab 3
-resources page: FL Studio 1.0.1 (Python), Cubase 1.0.1 (MIDI Remote, JavaScript inside a zlib-compressed
-`.midiremote`), Reason 1.0 (Lua codec and remote map), Logic 1.0 (`config.lua`), Bitwig 1.1 of 2026-06-26 (a Java
-`.bwextension` with Bitwig's own PDF manual inside).
+## Pads in detail
 
 - **Notes:** in the DAW program both banks send notes on channel 10: bank A 36–43, bank B 44–51.
 - **Logic, Cubase, Reason, FL Studio:** every pad plays its note into the DAW. Nothing else. FL Studio remaps the
-  notes to FPC's (FL's drum pad plugin) layout. Reason maps Kong and Rytmic drum volumes to the knobs.
+  notes to the layout of FPC (FL's drum pad plugin). Reason maps the drum volumes of Kong and Rytmic to the knobs.
 - **Pad lights in those four:** white or grey while pressed, dim (`14 14 14`) when released. Logic's code for it is
   commented out ("PAD LED (not working)"), so in Logic the pads keep the device's own colours.
 - **Cubase** has a commented-out bank B with mute, solo, editor and window-zone toggles: tried and dropped.
-- **Bitwig 1.1:** bank A = clip mode (pads launch the clips of the selected scene, in clip colours; a long press
-  stops; playing clips bright, recording clips blink red). Bank B = device mode: drum notes from C1, the encoder
-  shifts the note range in steps of four, pads in the drum instruments' colours (or the track colour), and pads
-  light up when a clip plays their note.
+- **Bitwig 1.1:** bank A is clip mode. The pads launch the clips of the selected scene, in the clip colours; a long
+  press stops a clip; playing clips are bright, recording clips blink red. Bank B is device mode: drum notes from
+  C1, the encoder shifts the note range in steps of four, the pads take the drum instruments' colours (or the
+  track colour), and a pad lights up when a clip plays its note.
+- **Live:** bank A launches clips, bank B plays the Drum Rack with each pad in its sound's colour.
 
-So no integration uses the pads for track selection. The linear DAWs leave both banks to drum notes.
+No integration uses the pads for track selection. The linear DAWs leave both banks to drum notes.
+
+## What reaches the tracks
+
+Each integration decides which MiniLab messages reach the tracks, so knob, fader and encoder moves don't end up in
+recordings:
+
+- **Bitwig:** the extension opens note inputs with filters. Keys, aftertouch, pitch bend and a few other messages
+  pass; the pads (channel 10) get their own input that can remap or block notes. The controls are in no filter.
+- **FL Studio:** the script marks each message as handled or not. It passes the pad notes on purpose and keeps the
+  controls.
+- **Reason:** the script sorts every message. Only notes ("Keyboard") go to the instrument; knobs and faders become
+  controls.
+- **Live, Cubase, Logic:** their control surface frameworks own the input too. What they pass was not checked in
+  the code.
+
+Knob moves are recorded as automation in all of them, not as MIDI.
 
 ## Two families
 
 - **Clip-launch DAWs (Live, Bitwig):** the encoder walks scenes and launches them, pads bank A launch clips,
   Shift + encoder picks tracks.
-- **Linear DAWs (Logic, Cubase, Reason; FL partly):** the encoder walks **tracks**, the click opens the plugin,
-  Shift + encoder moves the **playhead**. The guides say nothing about the pads beyond bank switching (probably
-  plain notes).
+- **Linear DAWs (Logic, Cubase, Reason; FL Studio partly):** the encoder walks **tracks**, the click opens the
+  plugin, Shift + encoder moves the **playhead**, and both pad banks play drum notes.
 
-Reaper is a linear DAW (no scenes, unless Helgobox's Playtime is installed), so the second family is the closer
-model. Today the extension follows Live for Shift + encoder (tracks) and Shift + click (arm).
-
-## Compared with the Reaper extension (2026-10-29)
-
-| Feature | Others | Reaper extension |
-|---|---|---|
-| Track navigation with name on screen | all | yes (Shift + encoder, pads) |
-| Arm track | Live | yes (Shift + click) |
-| Knobs on the focused plugin, name + value popup, realign | all | partly: always the **first** FX, not the focused one |
-| Parameter pages | Bitwig | no |
-| Faders: volume, sends, pan | all but FL | fader 1 volume only, no pickup |
-| Transport on Shift + pads, lights | all | yes; no blinking |
-| Play button = play/pause | all | play only |
-| Encoder: playhead / timeline, time on screen | Logic, Cubase, Reason, FL, Live (Arrangement) | no |
-| Encoder click: show/close plugin | Logic, Cubase, FL | no |
-| Mixer mode: knobs on 8 track volumes | Cubase (Reason: mixer lock) | no |
-| Drum pads in sound colours (bank B) | Live, Bitwig | no |
-| Clip launch (bank A) | Live, Bitwig | no (Reaper has no clips) |
-| Preset browsing | FL, Reason | no |
-| Notifications (tap tempo BPM, loop on/off, connected) | Live | no |
-
-## Suggested Reaper defaults
-
-Following the linear family, keeping what already works:
-
-- **Encoder turn:** tracks. **Encoder click:** show/close the selected track's FX (focused plugin).
-- **Shift + encoder:** move the playhead (by bar), time on the screen. **Shift + click:** arm.
-- **Knobs:** the focused FX (fall back to the selected track's first FX), click + turn for parameter pages.
-- **Faders:** volume, send 1, send 2, pan, with pickup.
-- **Pads:** see "Pads in detail": every linear DAW uses both banks for drum notes.
-- **Transport:** play/pause, blinking play/record, notifications for tap tempo and loop.
-
-This changes what Shift + encoder does today (tracks → playhead), so try it with the user before committing to it.
+Reaper is a linear DAW: it has no clips or scenes, unless the Helgobox Playtime add-on is installed. The extension
+follows the linear family; `docs/daw-comparison.md` shows where it differs.
