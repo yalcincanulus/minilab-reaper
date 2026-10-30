@@ -143,6 +143,27 @@ fn decode_cc(cc: u8, value: u8) -> Option<Event> {
     None
 }
 
+/// Whether a message from the device is for the extension only, not for tracks: the DAW program's controls
+/// (knobs, faders, encoder, Shift, transport), bank B's pads (markers) and the device's SysEx. Keys, bank A's pads,
+/// mod, pitch bend and everything in the Arturia program pass. Runs in the audio thread: no allocation.
+pub fn is_daw_control(msg: &[u8]) -> bool {
+    let Some(&first) = msg.first() else { return false };
+    let d1 = msg.get(1).copied().unwrap_or(0);
+    match (first & 0xF0, first & 0x0F) {
+        (0xF0, _) => first == 0xF0,
+        (0x80 | 0x90 | 0xA0, PAD_CHANNEL) => matches!(pad_from_note(d1), Some((_, PadBank::B))),
+        (0xB0, _) => {
+            DAW.knobs.contains(&d1)
+                || DAW.faders.contains(&d1)
+                || [DAW.shift, DAW.encoder, DAW.encoder_click].contains(&d1)
+                || DAW.shifted_encoder == Some(d1)
+                || DAW.shifted_encoder_click == Some(d1)
+                || (TRANSPORT_CC_FIRST..TRANSPORT_CC_FIRST + 5).contains(&d1)
+        }
+        _ => false,
+    }
+}
+
 fn decode_sysex(data: &[u8]) -> Event {
     // Universal identity reply: F0 7E <dev> 06 02 ...
     if data.len() > 4 && data[1] == 0x7E && data[3] == 0x06 && data[4] == 0x02 {
@@ -425,6 +446,21 @@ mod tests {
     fn decodes_arturia_program_controls() {
         assert_eq!(decode(&h("B0 4A 10")), Some(Event::Knob { index: 0, value: 16, program: Program::Arturia }));
         assert_eq!(decode(&h("B0 09 7F")), Some(Event::Shift { pressed: true }));
+    }
+
+    #[test]
+    fn daw_controls_stay_away_from_tracks() {
+        for control in ["B0 56 40", "B0 0E 10", "B0 1C 41", "B0 1C 40", "B0 76 7F", "B0 1B 7F", "B0 6B 7F", "99 2C 64",
+            "89 33 00", "A9 2D 30", "F0 00 20 6B 7F 42 02 00 40 63 01 F7"]
+        {
+            assert!(is_daw_control(&h(control)), "{control}");
+        }
+        // Keys, bank A, mod, pitch bend, sustain, the Arturia program's knobs.
+        for music in ["90 3C 64", "80 3C 00", "99 24 64", "A9 25 30", "B0 01 40", "E0 00 40", "B0 40 7F", "B0 4A 20",
+            "D0 30"]
+        {
+            assert!(!is_daw_control(&h(music)), "{music}");
+        }
     }
 
     #[test]

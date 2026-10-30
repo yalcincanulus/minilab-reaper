@@ -12,6 +12,8 @@ use std::fmt;
 use std::fs::File;
 use std::io::Write;
 use std::ptr::{null_mut, NonNull};
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -24,7 +26,9 @@ use minilab3_core::watchdog::{self, Watchdog};
 use reaper_low::raw::{midi_Output, MediaTrack, MIDI_event_t};
 use reaper_low::PluginContext;
 use reaper_macros::reaper_extension_plugin;
-use reaper_medium::{ControlSurface, ReaperSession};
+use reaper_medium::{
+    ControlSurface, MidiInputDeviceId, OnAudioBuffer, OnAudioBufferArgs, RealTimeAudioThreadScope, ReaperSession,
+};
 
 const DEVICE_NAME: &str = "Minilab3: MIDI";
 /// Messages per `run()` tick (~30 ms): well under what the device's input buffer takes.
@@ -38,11 +42,66 @@ const BLINK_MS: u128 = 400;
 #[reaper_extension_plugin]
 fn plugin_main(context: PluginContext) -> Result<(), Box<dyn Error>> {
     let mut session = ReaperSession::load(context);
-    let surface = Surface::new(*session.reaper().low());
+    let (tx, rx) = sync_channel(INPUT_QUEUE);
+    session.audio_reg_hardware_hook_add(Box::new(InputHook { reaper: session.create_real_time_reaper(), tx }))?;
+    let surface = Surface::new(*session.reaper().low(), rx);
     session.plugin_register_add_csurf_inst(Box::new(surface))?;
     session.plugin_register_add_at_exit(at_exit)?;
     let _ = SESSION.set(Fragile::new(session));
     Ok(())
+}
+
+/// The MiniLab's input device, for the audio thread; -1 until found.
+static INPUT_DEVICE: AtomicI32 = AtomicI32::new(-1);
+/// Messages the input queue holds between two `run()` ticks.
+const INPUT_QUEUE: usize = 1024;
+
+/// One message from the device, copied out of the audio thread without allocating. Longer SysEx is cut (the
+/// device's status messages are 12 bytes).
+struct InputMessage {
+    len: usize,
+    bytes: [u8; 32],
+}
+
+/// Runs in the audio thread, before Reaper hands the MiniLab's input to tracks. Every message goes to the
+/// extension through the queue; the DAW program's controls are then removed, so tracks (and recordings) only get
+/// keys, drum pads, mod and pitch bend. Other DAWs' integrations filter the same way.
+struct InputHook {
+    reaper: reaper_medium::Reaper<RealTimeAudioThreadScope>,
+    tx: SyncSender<InputMessage>,
+}
+
+impl OnAudioBuffer for InputHook {
+    fn call(&mut self, args: OnAudioBufferArgs) {
+        let dev = INPUT_DEVICE.load(Ordering::Relaxed);
+        if args.is_post || dev < 0 {
+            return;
+        }
+        self.reaper.get_midi_input(MidiInputDeviceId::new(dev as u8), |input| {
+            let Some(input) = input else { return };
+            let list = input.get_read_buf().as_ptr().as_ptr();
+            let mut bpos: c_int = 0;
+            loop {
+                let at = bpos;
+                let event = unsafe { (*list).EnumItems(&mut bpos) };
+                if event.is_null() {
+                    break;
+                }
+                // The bytes run past the declared 4-byte array for SysEx.
+                let msg = unsafe {
+                    let size = (*event).size.max(0) as usize;
+                    std::slice::from_raw_parts((*event).midi_message.as_ptr(), size)
+                };
+                let mut copy = InputMessage { len: msg.len().min(32), bytes: [0; 32] };
+                copy.bytes[..copy.len].copy_from_slice(&msg[..copy.len]);
+                let _ = self.tx.try_send(copy);
+                if protocol::is_daw_control(msg) {
+                    unsafe { (*list).DeleteItem(at) };
+                    bpos = at;
+                }
+            }
+        });
+    }
 }
 
 /// Keeps the session (and so the registered surface) alive while Reaper runs.
@@ -125,43 +184,6 @@ impl Api {
             };
             ok && CStr::from_ptr(buf.as_ptr()).to_string_lossy().contains(DEVICE_NAME)
         })
-    }
-
-    /// Input events newer than `after`, oldest first, as (index, device, bytes).
-    fn recent_input(&self, after: c_int) -> (c_int, Vec<(c_int, Vec<u8>)>) {
-        let mut events = Vec::new();
-        let mut newest = after;
-        let mut buf = [0u8; 1024];
-        for i in 0.. {
-            let mut size = buf.len() as c_int;
-            let (mut ts, mut dev, mut pos, mut loops) = (0, 0, 0.0, 0);
-            let idx = unsafe {
-                self.0.MIDI_GetRecentInputEvent(
-                    i,
-                    buf.as_mut_ptr() as *mut c_char,
-                    &mut size,
-                    &mut ts,
-                    &mut dev,
-                    &mut pos,
-                    &mut loops,
-                )
-            };
-            if idx == 0 || idx <= after {
-                break;
-            }
-            newest = newest.max(idx);
-            events.push((dev, buf[..size.clamp(0, buf.len() as c_int) as usize].to_vec()));
-        }
-        events.reverse();
-        (newest, events)
-    }
-
-    fn newest_input_index(&self) -> c_int {
-        let mut size = 0;
-        let (mut ts, mut dev, mut pos, mut loops) = (0, 0, 0.0, 0);
-        unsafe {
-            self.0.MIDI_GetRecentInputEvent(0, null_mut(), &mut size, &mut ts, &mut dev, &mut pos, &mut loops)
-        }
     }
 
     fn track(&self, index: usize) -> Option<*mut MediaTrack> {
@@ -445,7 +467,8 @@ struct Surface {
     queue: OutQueue,
     status: DeviceStatus,
     parser: MidiParser,
-    last_input: c_int,
+    /// Everything the MiniLab sends, from [`InputHook`].
+    input: Receiver<InputMessage>,
     dirty: Cell<bool>,
     started: Instant,
     last_device_scan: Option<Instant>,
@@ -477,10 +500,9 @@ impl fmt::Debug for Surface {
 }
 
 impl Surface {
-    fn new(low: reaper_low::Reaper) -> Self {
+    fn new(low: reaper_low::Reaper, input: Receiver<InputMessage>) -> Self {
         let api = Api(low);
         let log = File::create(format!("{}/{}", api.resource_path(), LOG_FILE)).ok();
-        let last_input = api.newest_input_index();
         let mut s = Surface {
             api,
             out_dev: None,
@@ -488,7 +510,7 @@ impl Surface {
             queue: OutQueue::default(),
             status: DeviceStatus::default(),
             parser: MidiParser::new(),
-            last_input,
+            input,
             dirty: Cell::new(true),
             started: Instant::now(),
             last_device_scan: None,
@@ -528,6 +550,7 @@ impl Surface {
         self.last_device_scan = Some(Instant::now());
         self.out_dev = self.api.find_device(true);
         self.in_dev = self.api.find_device(false);
+        INPUT_DEVICE.store(self.in_dev.unwrap_or(-1), Ordering::Relaxed);
         let (o, i) = (self.out_dev, self.in_dev);
         self.log(format!("devices: out {o:?} in {i:?}"));
         if let (Some(o), Some(_)) = (o, i) {
@@ -613,18 +636,13 @@ impl Surface {
     }
 
     fn read_input(&mut self) {
-        let (newest, events) = self.api.recent_input(self.last_input);
-        self.last_input = newest;
-        for (dev, bytes) in events {
-            if Some(dev) != self.in_dev {
-                continue;
-            }
+        while let Ok(InputMessage { len, bytes }) = self.input.try_recv() {
             if self.watchdog.on_input(self.started.elapsed()) {
                 self.log("device is back: connect and redraw");
                 self.connect();
             }
             let mut messages = Vec::new();
-            self.parser.push(&bytes, |m| messages.push(m.to_vec()));
+            self.parser.push(&bytes[..len], |m| messages.push(m.to_vec()));
             for m in messages {
                 let Some(event) = protocol::decode(&m) else { continue };
                 let now = self.started.elapsed();

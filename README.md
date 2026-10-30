@@ -31,8 +31,9 @@ colours when Reaper quits.
 
 Shift + Record with no armed track shows "No track armed" instead of opening Reaper's blocking warning.
 
-Bank B pads also send their notes (44–51) to the armed track, until the extension takes over
-the MiniLab's input. `docs/daw-integrations.md` compares what Arturia's integrations do in other DAWs.
+Tracks with the MiniLab as input only get what you play: keys, bank A's drum pads, mod and pitch bend. Knobs,
+faders, the encoder, Shift + pads and bank B's marker pads control Reaper and stay out of recordings. In the Arturia
+program (Shift + Pad 3) everything goes to the tracks, as without the extension. `docs/daw-integrations.md` compares what Arturia's integrations do in other DAWs.
 
 ## Build and install
 
