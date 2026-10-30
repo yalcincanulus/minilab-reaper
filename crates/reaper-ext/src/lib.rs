@@ -300,6 +300,64 @@ impl Api {
         }
     }
 
+    /// Show the FX of `track`, or close them if any are open. Returns what to say on the screen.
+    fn toggle_fx(&self, track: *mut MediaTrack) -> (String, String) {
+        unsafe {
+            let count = self.0.TrackFX_GetCount(track);
+            let floating: Vec<c_int> =
+                (0..count).filter(|&i| !self.0.TrackFX_GetFloatingWindow(track, i).is_null()).collect();
+            let chain_open = self.0.TrackFX_GetChainVisible(track) != -1;
+            if !floating.is_empty() || chain_open {
+                for i in floating {
+                    self.0.TrackFX_Show(track, i, 2); // close floating window
+                }
+                if chain_open {
+                    self.0.TrackFX_Show(track, 0, 0); // close chain window
+                }
+                ("FX".into(), "Closed".into())
+            } else if count == 0 {
+                // An empty FX chain opens with Reaper's "Add FX" browser.
+                self.0.TrackFX_Show(track, 0, 1);
+                ("No FX yet".into(), "Pick one in Reaper".into())
+            } else {
+                let fx = self.knob_fx().filter(|(t, _)| *t == track).map_or(0, |(_, fx)| fx);
+                self.0.TrackFX_Show(track, fx, 3); // floating window
+                (self.fx_name(track, fx), if count > 1 { format!("FX {}/{count}", fx + 1) } else { String::new() })
+            }
+        }
+    }
+
+    /// Move the playhead `step` bars (the edit cursor, or the play position while playing). Returns the new
+    /// position as (bars.beats, time).
+    fn move_playhead(&self, step: i32) -> (String, String) {
+        let api = &self.0;
+        let playing = api.GetPlayState() & 5 != 0;
+        let pos = if playing { api.GetPlayPosition2() } else { api.GetCursorPosition() };
+        let bar_start = |bar: c_int| unsafe { api.TimeMap2_beatsToTime(null_mut(), 0.0, &bar) };
+        let mut bar = 0;
+        unsafe { api.TimeMap2_timeToBeats(null_mut(), pos, &mut bar, null_mut(), null_mut(), null_mut()) };
+        // Float rounding can put a bar's start just inside the previous bar.
+        if pos > bar_start(bar + 1) - 1e-4 {
+            bar += 1;
+        }
+        // While playing, the playhead has moved on since the last step: early in a bar still counts as its start,
+        // or turning back would land on the same bar again.
+        let tolerance = if playing { (bar_start(bar + 1) - bar_start(bar)) / 4.0 } else { 1e-4 };
+        let at_start = pos - bar_start(bar) < tolerance;
+        let target = bar_start(rules::bar_step(bar, at_start, step));
+        api.SetEditCurPos(target, true, true);
+        (format!("Bar {}", self.time_text(target, 2)), self.time_text(target, 0))
+    }
+
+    /// Reaper's time text: mode 0 = minutes:seconds, 2 = bars.beats.
+    fn time_text(&self, pos: f64, mode: c_int) -> String {
+        let mut buf = [0 as c_char; 64];
+        unsafe {
+            self.0.format_timestr_pos(pos, buf.as_mut_ptr(), buf.len() as c_int, mode);
+            CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned()
+        }
+    }
+
     fn command(&self, id: c_int) {
         self.0.Main_OnCommand(id, 0)
     }
@@ -578,8 +636,17 @@ impl Surface {
                     self.notify(name, format!("Page {}/{}", self.knob_page + 1, pages));
                 }
             }
-            // Free for now; the navigation slice gives it a job (show/close the FX).
-            Command::EncoderClick => {}
+            Command::ToggleFx => match api.selected_track() {
+                Some(t) => {
+                    let (line1, line2) = api.toggle_fx(t);
+                    self.notify(line1, line2);
+                }
+                None => self.notify("No track", "selected"),
+            },
+            Command::MovePlayhead(step) => {
+                let (line1, line2) = api.move_playhead(step);
+                self.notify(line1, line2);
+            }
             Command::Redraw => self.connect(),
         }
         self.dirty.set(true);

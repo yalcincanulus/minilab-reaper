@@ -181,6 +181,13 @@ pub fn knob_position(normalized: f64) -> u8 {
     (normalized.clamp(0.0, 1.0) * 127.0).round() as u8
 }
 
+/// The bar (0-based) the playhead goes to after `step` encoder steps from inside `bar`. Going back from the middle
+/// of a bar first goes to its start, as a rewind button does.
+pub fn bar_step(bar: i32, at_bar_start: bool, step: i32) -> i32 {
+    let target = if step < 0 && !at_bar_start { bar + step + 1 } else { bar + step };
+    target.max(0)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     /// Select the track this many places up (-) or down (+), clamped to the track list.
@@ -194,8 +201,10 @@ pub enum Command {
     SetKnob(u8, u8),
     /// Encoder clicked and turned: the knobs move this many pages of 8 parameters.
     KnobPage(i32),
-    /// Encoder clicked and released without turning (no Shift).
-    EncoderClick,
+    /// Encoder clicked and released without turning: show or close the selected track's FX.
+    ToggleFx,
+    /// Shift + encoder: move the playhead this many bars (see [`bar_step`]).
+    MovePlayhead(i32),
     /// The device switched program or pad bank: it forgot what we drew.
     Redraw,
 }
@@ -203,7 +212,8 @@ pub enum Command {
 /// What a device event means for Reaper. `None` for events Reaper should simply receive as MIDI (keys, ...).
 pub fn command(event: &Event) -> Option<Command> {
     match *event {
-        Event::Encoder { delta, shifted: true } => Some(Command::SelectTrackBy(delta as i32)),
+        Event::Encoder { delta, shifted: false } => Some(Command::SelectTrackBy(delta as i32)),
+        Event::Encoder { delta, shifted: true } => Some(Command::MovePlayhead(delta as i32)),
         Event::EncoderClick { pressed: true, shifted: true } => Some(Command::ToggleArm),
         Event::Transport { button, pressed: true } => Some(Command::Transport(button)),
         Event::Fader { index, value, program: Program::Daw } => Some(Command::MoveFader(index, value)),
@@ -231,7 +241,7 @@ impl Controls {
             }
             Event::EncoderClick { pressed: false, shifted: false } => {
                 let was_held = std::mem::take(&mut self.encoder_held);
-                (was_held && !self.turned_while_held).then_some(Command::EncoderClick)
+                (was_held && !self.turned_while_held).then_some(Command::ToggleFx)
             }
             Event::Encoder { delta, shifted: false } if self.encoder_held => {
                 self.turned_while_held = true;
@@ -383,8 +393,9 @@ mod tests {
 
     #[test]
     fn commands_from_events() {
-        assert_eq!(command(&Event::Encoder { delta: -1, shifted: true }), Some(Command::SelectTrackBy(-1)));
-        assert_eq!(command(&Event::Encoder { delta: 1, shifted: false }), None);
+        assert_eq!(command(&Event::Encoder { delta: -1, shifted: false }), Some(Command::SelectTrackBy(-1)));
+        assert_eq!(command(&Event::Encoder { delta: 2, shifted: true }), Some(Command::MovePlayhead(2)));
+        assert_eq!(command(&Event::EncoderClick { pressed: true, shifted: true }), Some(Command::ToggleArm));
         assert_eq!(
             command(&Event::Transport { button: TransportButton::Play, pressed: true }),
             Some(Command::Transport(TransportButton::Play))
@@ -404,10 +415,20 @@ mod tests {
         assert_eq!(c.handle(&turn(1)), Some(Command::KnobPage(1)));
         assert_eq!(c.handle(&click(false)), None); // it was a page turn, not a click
         assert_eq!(c.handle(&click(true)), None);
-        assert_eq!(c.handle(&click(false)), Some(Command::EncoderClick));
-        assert_eq!(c.handle(&turn(-1)), None); // plain turn: not mapped yet
+        assert_eq!(c.handle(&click(false)), Some(Command::ToggleFx));
+        assert_eq!(c.handle(&turn(-1)), Some(Command::SelectTrackBy(-1))); // released: turns pick tracks again
         let shifted = Event::Encoder { delta: 1, shifted: true };
-        assert_eq!(c.handle(&shifted), Some(Command::SelectTrackBy(1)));
+        assert_eq!(c.handle(&shifted), Some(Command::MovePlayhead(1)));
+    }
+
+    #[test]
+    fn playhead_moves_by_bars() {
+        assert_eq!(bar_step(4, true, 1), 5);
+        assert_eq!(bar_step(4, false, 1), 5);
+        assert_eq!(bar_step(4, true, -1), 3);
+        assert_eq!(bar_step(4, false, -1), 4); // mid-bar: back to its start first
+        assert_eq!(bar_step(4, false, -2), 3);
+        assert_eq!(bar_step(0, true, -3), 0);
     }
 
     #[test]

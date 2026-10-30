@@ -14,9 +14,11 @@ The MiniLab must be in its DAW program (Shift + Pad 3).
 |---|---|
 | Screen | Selected track: name, position (2/5), volume; play, record and arm icons |
 | Pads 1–8 (bank A) | Lit in the colours of tracks 1–8, the selected track bright. Press: select that track |
-| Shift + encoder | Select the previous or next track |
-| Shift + encoder click | Arm or disarm the selected track |
+| Encoder | Select the previous or next track |
+| Encoder click | Open the selected track's plugin window, or close it. A track with no plugin opens its FX chain, where Reaper offers its plugin list |
 | Encoder click + turn | Page through the plugin's parameters, 8 at a time |
+| Shift + encoder | Move the playhead one bar. The screen shows the bar and the time. Turning back from the middle of a bar goes to its start first |
+| Shift + encoder click | Arm or disarm the selected track |
 | Shift + pads 4–8 | Loop, play/pause, stop, record, tap tempo. Lights follow Reaper's state while Shift is held; play and record blink while running. Tap tempo and loop show a short message |
 | Faders 1–4 | Volume, send 1, send 2, pan of the selected track. A fader takes over once it reaches the current value (pickup); until then the popup says which way to move it |
 | Knobs 1–8 | Parameters of the plugin whose window is open on the selected track, else its first plugin. Turning a knob shows the name and value on the screen |
@@ -27,8 +29,7 @@ colours when Reaper quits.
 
 Shift + Record with no armed track shows "No track armed" instead of opening Reaper's blocking warning.
 
-Not yet: the encoder without Shift (planned: tracks, click opens the plugin; Shift + encoder moves the playhead),
-pads bank B, a mixer mode. `docs/daw-integrations.md` compares what Arturia's integrations do in other DAWs.
+Not yet: pads bank B, a mixer mode. `docs/daw-integrations.md` compares what Arturia's integrations do in other DAWs.
 
 ## Build and install
 
