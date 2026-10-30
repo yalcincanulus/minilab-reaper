@@ -48,6 +48,8 @@ case "${1:-}" in
     cp "$shot" "$out/reaper-latest.png"
     echo "$shot" ;;
   quit)
+    # Without a running Reaper, "reaper -nonewinst" hangs.
+    pgrep -x reaper >/dev/null || { echo "Reaper is not running."; exit 0; }
     mode=":exit"
     [[ "${2:-}" == "--discard" ]] && mode=":nosave:exit"
     reaper -nonewinst "-closeall$mode" >/dev/null 2>&1 || true
