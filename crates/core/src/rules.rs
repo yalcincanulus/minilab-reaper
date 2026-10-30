@@ -6,11 +6,13 @@
 use crate::protocol::{self, led_id, Event, Icons, PadBank, Program, Rgb, TransportButton, TransportIcon};
 use crate::queue::Key;
 
+/// A marker on a pad of bank B.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Track {
-    pub name: String,
-    /// 8-bit colour from Reaper, `None` when the track has no custom colour.
+pub struct Marker {
+    /// 8-bit colour from Reaper, `None` when the marker has no custom colour.
     pub color: Option<(u8, u8, u8)>,
+    /// The playhead is at or after this marker, before the next one.
+    pub current: bool,
 }
 
 /// A parameter on a knob: the selected track's first FX, parameters 1-8.
@@ -43,16 +45,20 @@ pub struct Transport {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct State {
-    /// The first 8 tracks (one per pad).
-    pub tracks: Vec<Track>,
     pub track_count: usize,
     /// 0-based index of the selected track.
     pub selected: Option<usize>,
     pub selected_name: String,
+    /// 8-bit colour of the selected track, `None` when it has no custom colour.
+    pub selected_color: Option<(u8, u8, u8)>,
     /// Linear volume of the selected track (1.0 = 0 dB).
     pub selected_volume: f64,
     pub selected_armed: bool,
     pub transport: Transport,
+    /// Bank A pads held down right now (drum notes).
+    pub pads_held: [bool; 8],
+    /// Bank B: markers 1-8; `None` where the project has no marker with that number.
+    pub markers: [Option<Marker>; 8],
     /// Knobs 1-8; `None` where no parameter is mapped.
     pub knobs: [Option<Param>; 8],
     /// Faders 1-4; `None` where there is nothing to control (no such send).
@@ -116,19 +122,22 @@ pub fn render(state: &State) -> Vec<(Key, Vec<u8>)> {
     };
     out.push((Key::Screen, screen));
 
-    for pad in 0..8u8 {
-        let color = match state.tracks.get(pad as usize) {
-            Some(t) => {
-                let base = t.color.map(|(r, g, b)| Rgb::from_8bit(r, g, b)).unwrap_or(UNCOLORED);
-                if state.selected == Some(pad as usize) {
-                    base
-                } else {
-                    base.scaled(DIM)
-                }
-            }
+    let rgb = |color: Option<(u8, u8, u8)>| color.map(|(r, g, b)| Rgb::from_8bit(r, g, b)).unwrap_or(UNCOLORED);
+    // Bank A: drum pads in the selected track's colour, bright while held.
+    let drums = rgb(state.selected_color);
+    for (pad, held) in state.pads_held.iter().enumerate() {
+        let id = led_id::PADS_A + pad as u8;
+        out.push((Key::Led(id), protocol::led(id, if *held { drums } else { drums.scaled(DIM) })));
+    }
+    // Bank B: markers in their colours, the one the playhead is in bright. The device keeps these while bank A is
+    // up.
+    for (pad, marker) in state.markers.iter().enumerate() {
+        let color = match marker {
+            Some(m) if m.current => rgb(m.color),
+            Some(m) => rgb(m.color).scaled(DIM),
             None => Rgb::OFF,
         };
-        let id = led_id::PADS_A + pad;
+        let id = led_id::PADS_B + pad as u8;
         out.push((Key::Led(id), protocol::led(id, color)));
     }
 
@@ -192,7 +201,10 @@ pub fn bar_step(bar: i32, at_bar_start: bool, step: i32) -> i32 {
 pub enum Command {
     /// Select the track this many places up (-) or down (+), clamped to the track list.
     SelectTrackBy(i32),
-    SelectTrack(usize),
+    /// Bank A pad pressed (`true`) or released: a drum note. Reaper gets the note itself; this is for the lights.
+    DrumPad(u8, bool),
+    /// Bank B pad: jump to the marker with this number (1-8).
+    GoToMarker(u8),
     ToggleArm,
     Transport(TransportButton),
     /// Fader index 0-3 moved to this position 0..=127. Pickup decides whether it applies.
@@ -218,7 +230,8 @@ pub fn command(event: &Event) -> Option<Command> {
         Event::Transport { button, pressed: true } => Some(Command::Transport(button)),
         Event::Fader { index, value, program: Program::Daw } => Some(Command::MoveFader(index, value)),
         Event::Knob { index, value, program: Program::Daw } => Some(Command::SetKnob(index, value)),
-        Event::Pad { index, bank: PadBank::A, on: true, .. } => Some(Command::SelectTrack(index as usize)),
+        Event::Pad { index, bank: PadBank::A, on, .. } => Some(Command::DrumPad(index, on)),
+        Event::Pad { index, bank: PadBank::B, on: true, .. } => Some(Command::GoToMarker(index + 1)),
         _ => None,
     }
 }
@@ -282,16 +295,15 @@ mod tests {
 
     fn state() -> State {
         State {
-            tracks: vec![
-                Track { name: "Lead".into(), color: Some((220, 60, 60)) },
-                Track { name: "Bass".into(), color: None },
-            ],
             track_count: 2,
             selected: Some(0),
             selected_name: "Lead".into(),
+            selected_color: Some((220, 60, 60)),
             selected_volume: 1.0,
             selected_armed: true,
             transport: Transport { playing: true, ..Default::default() },
+            pads_held: [false; 8],
+            markers: [const { None }; 8],
             knobs: [const { None }; 8],
             faders: [const { None }; 4],
             notification: None,
@@ -311,11 +323,26 @@ mod tests {
     }
 
     #[test]
-    fn pads_show_track_colours_selected_bright() {
-        let out = render(&state());
-        assert_eq!(find(&out, Key::Led(0x34)), protocol::led(0x34, Rgb { r: 110, g: 30, b: 30 }));
-        assert_eq!(find(&out, Key::Led(0x35)), protocol::led(0x35, UNCOLORED.scaled(DIM)));
-        assert_eq!(find(&out, Key::Led(0x36)), protocol::led(0x36, Rgb::OFF));
+    fn drum_pads_in_track_colour_bright_while_held() {
+        let mut s = state();
+        s.pads_held[1] = true;
+        let out = render(&s);
+        let lead = Rgb { r: 110, g: 30, b: 30 };
+        assert_eq!(find(&out, Key::Led(0x34)), protocol::led(0x34, lead.scaled(DIM)));
+        assert_eq!(find(&out, Key::Led(0x35)), protocol::led(0x35, lead));
+        s.selected_color = None;
+        assert_eq!(find(&render(&s), Key::Led(0x34)), protocol::led(0x34, UNCOLORED.scaled(DIM)));
+    }
+
+    #[test]
+    fn marker_pads_in_marker_colours_current_bright() {
+        let mut s = state();
+        s.markers[0] = Some(Marker { color: None, current: false });
+        s.markers[2] = Some(Marker { color: Some((0, 220, 0)), current: true });
+        let out = render(&s);
+        assert_eq!(find(&out, Key::Led(0x44)), protocol::led(0x44, UNCOLORED.scaled(DIM)));
+        assert_eq!(find(&out, Key::Led(0x45)), protocol::led(0x45, Rgb::OFF));
+        assert_eq!(find(&out, Key::Led(0x46)), protocol::led(0x46, Rgb::from_8bit(0, 220, 0)));
     }
 
     #[test]
@@ -401,8 +428,11 @@ mod tests {
             Some(Command::Transport(TransportButton::Play))
         );
         assert_eq!(command(&Event::Transport { button: TransportButton::Play, pressed: false }), None);
-        let pad = Event::Pad { index: 2, bank: PadBank::A, velocity: 90, on: true };
-        assert_eq!(command(&pad), Some(Command::SelectTrack(2)));
+        let pad = |bank, on| Event::Pad { index: 2, bank, velocity: 90, on };
+        assert_eq!(command(&pad(PadBank::A, true)), Some(Command::DrumPad(2, true)));
+        assert_eq!(command(&pad(PadBank::A, false)), Some(Command::DrumPad(2, false)));
+        assert_eq!(command(&pad(PadBank::B, true)), Some(Command::GoToMarker(3)));
+        assert_eq!(command(&pad(PadBank::B, false)), None);
     }
 
     #[test]

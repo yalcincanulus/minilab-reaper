@@ -19,7 +19,7 @@ use fragile::Fragile;
 use minilab3_core::protocol::{self, hex, MidiParser, TransportButton};
 use minilab3_core::queue::{Key, OutQueue};
 use minilab3_core::pickup::{Move, Pickup};
-use minilab3_core::rules::{self, Command, Controls, DeviceStatus, FaderTarget, Param, State, Track, Transport};
+use minilab3_core::rules::{self, Command, Controls, DeviceStatus, FaderTarget, Marker, Param, State, Transport};
 use minilab3_core::watchdog::{self, Watchdog};
 use reaper_low::raw::{midi_Output, MediaTrack, MIDI_event_t};
 use reaper_low::PluginContext;
@@ -100,6 +100,14 @@ impl Drop for Output {
     fn drop(&mut self) {
         unsafe { reaper_low::delete_midi_output(self.0) };
     }
+}
+
+/// A marker in the project. `number` is the one Reaper shows on the ruler.
+struct ProjectMarker {
+    number: c_int,
+    pos: f64,
+    name: String,
+    color: Option<(u8, u8, u8)>,
 }
 
 /// Small safe wrappers over the C API. All calls happen on Reaper's main thread.
@@ -187,13 +195,70 @@ impl Api {
     }
 
     fn track_color(&self, track: *mut MediaTrack) -> Option<(u8, u8, u8)> {
-        let native = unsafe { self.0.GetTrackColor(track) };
+        self.color(unsafe { self.0.GetTrackColor(track) })
+    }
+
+    /// A native colour from Reaper; 0 means "no custom colour".
+    fn color(&self, native: c_int) -> Option<(u8, u8, u8)> {
         if native == 0 {
             return None;
         }
         let (mut r, mut g, mut b) = (0, 0, 0);
         unsafe { self.0.ColorFromNative(native & 0xFFFFFF, &mut r, &mut g, &mut b) };
         Some((r as u8, g as u8, b as u8))
+    }
+
+    /// The project's markers (not regions).
+    fn markers(&self) -> Vec<ProjectMarker> {
+        let mut markers = Vec::new();
+        for i in 0.. {
+            let (mut region, mut pos, mut end, mut name, mut number, mut color) =
+                (false, 0.0, 0.0, std::ptr::null(), 0, 0);
+            let more = unsafe {
+                self.0.EnumProjectMarkers3(
+                    null_mut(), i, &mut region, &mut pos, &mut end, &mut name, &mut number, &mut color,
+                )
+            };
+            if more == 0 {
+                break;
+            }
+            if !region {
+                let name = if name.is_null() {
+                    String::new()
+                } else {
+                    unsafe { CStr::from_ptr(name).to_string_lossy().into_owned() }
+                };
+                markers.push(ProjectMarker { number, pos, name, color: self.color(color) });
+            }
+        }
+        markers
+    }
+
+    fn playhead(&self) -> f64 {
+        if self.0.GetPlayState() & 5 != 0 { self.0.GetPlayPosition2() } else { self.0.GetCursorPosition() }
+    }
+
+    /// Markers 1-8 for the pads of bank B. The current one is the last marker at or before the playhead.
+    fn marker_pads(&self) -> [Option<Marker>; 8] {
+        let markers = self.markers();
+        let playhead = self.playhead() + 1e-4;
+        let current =
+            markers.iter().filter(|m| m.pos <= playhead).max_by(|a, b| a.pos.total_cmp(&b.pos)).map(|m| m.number);
+        std::array::from_fn(|pad| {
+            let number = pad as c_int + 1;
+            let m = markers.iter().find(|m| m.number == number)?;
+            Some(Marker { color: m.color, current: current == Some(number) })
+        })
+    }
+
+    /// The name Reaper gives a pad's note on `track` (MIDI editor note names), if any.
+    fn note_name(&self, track: *mut MediaTrack, pitch: c_int) -> Option<String> {
+        let name = unsafe { self.0.GetTrackMIDINoteNameEx(null_mut(), track, pitch, protocol::PAD_CHANNEL as c_int) };
+        if name.is_null() {
+            return None;
+        }
+        let name = unsafe { CStr::from_ptr(name).to_string_lossy().into_owned() };
+        (!name.is_empty()).then_some(name)
     }
 
     /// The FX the knobs control: the focused FX window if it belongs to the selected track, else that track's first
@@ -332,7 +397,7 @@ impl Api {
     fn move_playhead(&self, step: i32) -> (String, String) {
         let api = &self.0;
         let playing = api.GetPlayState() & 5 != 0;
-        let pos = if playing { api.GetPlayPosition2() } else { api.GetCursorPosition() };
+        let pos = self.playhead();
         let bar_start = |bar: c_int| unsafe { api.TimeMap2_beatsToTime(null_mut(), 0.0, &bar) };
         let mut bar = 0;
         unsafe { api.TimeMap2_timeToBeats(null_mut(), pos, &mut bar, null_mut(), null_mut(), null_mut()) };
@@ -395,6 +460,9 @@ struct Surface {
     /// Screen message and when it ends.
     notification: Option<(String, String, Instant)>,
     blink: bool,
+    /// Bank A pads held down, and bank B's markers as last drawn.
+    pads_held: [bool; 8],
+    markers: [Option<Marker>; 8],
     /// The selected track at the last redraw, to release the faders when it changes.
     faders_track: Option<*mut MediaTrack>,
     log: Option<File>,
@@ -430,6 +498,8 @@ impl Surface {
             fader_waiting: [None; 4],
             notification: None,
             blink: true,
+            pads_held: [false; 8],
+            markers: Default::default(),
             faders_track: None,
             log,
         };
@@ -482,21 +552,19 @@ impl Surface {
     fn state(&self) -> State {
         let api = &self.api;
         let count = api.track_count();
-        let tracks = (0..count.min(8))
-            .filter_map(|i| api.track(i))
-            .map(|t| Track { name: api.track_name(t), color: api.track_color(t) })
-            .collect();
         let selected = api.selected_track();
         let play = api.0.GetPlayState();
         let repeat = api.0.GetSetRepeat(-1) == 1;
         State {
-            tracks,
             track_count: count,
             selected: selected.map(|t| api.info(t, c"IP_TRACKNUMBER") as usize - 1),
             selected_name: selected.map(|t| api.track_name(t)).unwrap_or_default(),
+            selected_color: selected.and_then(|t| api.track_color(t)),
             selected_volume: selected.map(|t| api.info(t, c"D_VOL")).unwrap_or(1.0),
             selected_armed: selected.is_some_and(|t| api.info(t, c"I_RECARM") == 1.0),
             transport: Transport { playing: play & 1 != 0, recording: play & 4 != 0, repeat },
+            pads_held: self.pads_held,
+            markers: self.markers.clone(),
             knobs: std::array::from_fn(|i| {
                 let (t, fx) = api.knob_fx()?;
                 api.knob_param(t, fx, (self.knob_page * 8 + i) as c_int)
@@ -577,7 +645,26 @@ impl Surface {
                     self.select((current + step as i64).clamp(0, last) as usize);
                 }
             }
-            Command::SelectTrack(i) => self.select(i),
+            Command::DrumPad(pad, on) => {
+                self.pads_held[pad as usize] = on;
+                let pitch = protocol::PAD_A_NOTE as c_int + pad as c_int;
+                if let Some(name) = on.then(|| api.selected_track().and_then(|t| api.note_name(t, pitch))).flatten() {
+                    self.notify(name, format!("Pad {}", pad + 1));
+                }
+            }
+            Command::GoToMarker(number) => {
+                let marker = api.markers().into_iter().find(|m| m.number == number as c_int);
+                match marker {
+                    Some(ProjectMarker { pos, name, .. }) => {
+                        api.0.SetEditCurPos(pos, true, true);
+                        let line1 = if name.is_empty() { format!("Marker {number}") } else { name };
+                        let line2 = format!("Bar {}", api.time_text(pos, 2));
+                        self.notify(line1, line2);
+                    }
+                    // M in Reaper: "Markers: Insert marker at current position".
+                    None => self.notify(format!("No marker {number}"), "Add one: M in Reaper"),
+                }
+            }
             Command::ToggleArm => {
                 if let Some(t) = api.selected_track() {
                     let armed = api.info(t, c"I_RECARM");
@@ -722,6 +809,12 @@ impl ControlSurface for Surface {
             None => {}
         }
         self.tick_timers();
+        // Reaper has no callback for marker edits, and the current marker changes as the playhead moves.
+        let markers = self.api.marker_pads();
+        if markers != self.markers {
+            self.markers = markers;
+            self.dirty.set(true);
+        }
         if self.dirty.get() {
             self.sync_faders();
             self.sync_knobs();

@@ -68,7 +68,7 @@ pub const DAW_FADER_CCS: [u8; 4] = DAW.faders;
 pub const MOD_CC: u8 = 1;
 /// 0-based, i.e. MIDI channel 10.
 pub const PAD_CHANNEL: u8 = 9;
-const PAD_A_NOTE: u8 = 36;
+pub const PAD_A_NOTE: u8 = 36;
 const PAD_B_NOTE: u8 = 44;
 const TRANSPORT_CC_FIRST: u8 = 105; // 105-109: loop, stop, play, record, tap
 

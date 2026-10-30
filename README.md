@@ -13,7 +13,8 @@ The MiniLab must be in its DAW program (Shift + Pad 3).
 | On the MiniLab | In Reaper |
 |---|---|
 | Screen | Selected track: name, position (2/5), volume; play, record and arm icons |
-| Pads 1–8 (bank A) | Lit in the colours of tracks 1–8, the selected track bright. Press: select that track |
+| Pads bank A | Drum pads: they play notes 36–43 on the armed track. Lit dim in the selected track's colour, bright while pressed. If the track names the note (MIDI editor note names), the screen shows the name |
+| Pads bank B (Shift + Pad 2) | Markers 1–8: a pad jumps to the marker with that number. Pads light in the marker colours; the marker the playhead is in is bright. A pad with no marker stays dark. Press M in Reaper to add a marker |
 | Encoder | Select the previous or next track |
 | Encoder click | Open the selected track's plugin window, or close it. A track with no plugin opens its FX chain, where Reaper offers its plugin list |
 | Encoder click + turn | Page through the plugin's parameters, 8 at a time |
@@ -29,7 +30,8 @@ colours when Reaper quits.
 
 Shift + Record with no armed track shows "No track armed" instead of opening Reaper's blocking warning.
 
-Not yet: pads bank B, a mixer mode. `docs/daw-integrations.md` compares what Arturia's integrations do in other DAWs.
+Not yet: a mixer mode. Bank B pads also send their notes (44–51) to the armed track, until the extension takes over
+the MiniLab's input. `docs/daw-integrations.md` compares what Arturia's integrations do in other DAWs.
 
 ## Build and install
 
