@@ -19,7 +19,7 @@ and Ableton's script disagree, the script wins (it is what runs).
 | Shift + turn | **Tracks** | **Tracks** | Next/prev preset (plugin); fast forward / rewind | **Fast forward / rewind** | **Timeline** | **Fast forward / rewind** |
 | Shift + click | **Arm track** | (Channel Rack / Browser: likely copied text) | Channel Rack / Browser | Show/close library | – | Device mode / Mixer mode |
 | Knobs 1–8 | Focused plugin's parameters | Focused plugin, paged | Focused plugin | Focused plugin | Focused plugin, or mixer channel | Focused plugin, or **8 track volumes** (Mixer mode) |
-| Faders 1–4 | Volume, send A, send B, pan | Volume, sends, pan | Plugin parameters; else 1 volume, 4 pan | Volume, sends, pan | Plugin, or volume/sends/pan (mixer) | Volume, pan, sends 1–2 |
+| Faders 1–4 | Volume, send A, send B, pan | Volume, sends, pan | Plugin parameters; else 1 volume, 4 pan | Volume, sends, pan | Plugin, or volume/sends/pan (mixer) | Volume, send 1, send 2, pan ("scaled" takeover; script, 2026-10-30) |
 | Pads bank A | Clip launch, clip colours | Clip launch, clip colours | Drum notes (FPC layout) | Drum notes | Drum notes | Drum notes |
 | Pads bank B | Drum Rack, each pad in its sound's colour | Drum notes, drum colours, light on playback | Drum notes (FPC layout) | Drum notes | Drum notes | Drum notes |
 | Shift + pads 4–8 | Loop, play/pause, stop, record, tap | same | same | same | same | same |
