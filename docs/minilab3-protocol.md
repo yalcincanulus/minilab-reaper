@@ -2,7 +2,7 @@
 
 Sources: captured from the device on 2026-10-23 (`reference/capture-arturia-mode.log`), Ableton Live 12's
 `MiniLab_3` remote script (decompiled: github.com/gluon/AbletonLive12_MIDIRemoteScripts), and tests on the device
-with `tools/ml3.py` and the cameras (2026-10-29). Started in the earlier `arturia-minilab-exploration` repo (a
+with a small device tool and cameras (2026-10-29). Started in the earlier `arturia-minilab-exploration` repo (a
 browser synth using Web MIDI).
 
 Status: **verified** = seen on hardware. **script** = from Ableton's script, not yet seen on hardware.

@@ -27,11 +27,14 @@ screen and detects each action over MIDI works well, and flashing the Oct LEDs g
 
 ## Eyes on the device
 
-- `tools/phone-shot.sh`: Galaxy M31 over adb, camera app in Pro mode. Reads the screen text and sees Shift, Hold,
-  Oct and knob 1. `--ui` saves the phone's own screen when a shot fails.
-- `tools/cam-shot.sh`: webcam, side view of the pads, faders and knobs. Pad colours, no text.
-- `tools/ml3.py`: send connect, LEDs, screen, raw SysEx; listen to the device. While Reaper runs, PipeWire's MIDI
-  bridge holds the raw port, and ml3.py falls back to the ALSA sequencer (`aseqsend`, `aseqdump`) by itself.
+These tools are not part of the extension; they live in `.scratch/tools/` (git-ignored).
+
+- `.scratch/tools/phone-shot.sh`: Galaxy M31 over adb, camera app in Pro mode. Reads the screen text and sees
+  Shift, Hold, Oct and knob 1. `--ui` saves the phone's own screen when a shot fails.
+- `.scratch/tools/cam-shot.sh`: webcam, side view of the pads, faders and knobs. Pad colours, no text.
+- `.scratch/tools/ml3.py`: send connect, LEDs, screen, raw SysEx; listen to the device. While Reaper runs,
+  PipeWire's MIDI bridge holds the raw port, and ml3.py falls back to the ALSA sequencer (`aseqsend`, `aseqdump`)
+  by itself.
 - When the cameras are up, check output on them yourself rather than asking the user. Take shots with hands clear of the device: a
   hand on knob 1 covers half the screen.
 
@@ -57,7 +60,8 @@ screen and detects each action over MIDI works well, and flashing the Oct LEDs g
 - `tools/fake-input.sh link | send <hex> | unlink`: fake MiniLab input. Reaper sees messages sent to Midi Through
   as coming from the MiniLab, so input features can be tested without the user.
 - `reaper.ini` changes only stick while Reaper is closed: Reaper rewrites it on exit.
-- `reaper/spike/minilab_spike.lua`: the Lua spike (stop it with `reaper/spike/stop.lua`). Log: `.scratch/spike.log`.
+- `.scratch/spike/minilab_spike.lua`: the Lua spike, the prototype before the extension (stop it with
+  `.scratch/spike/stop.lua`). Log: `.scratch/spike.log`.
 - `reaper/test.RPP`: the test project (Lead, Bass, Drums, Keys, Vocals; Reaper's own plugins; synth tracks take
   MiniLab input).
 

@@ -79,6 +79,6 @@ In Reaper's Preferences → MIDI Devices:
 - `docs/minilab3-protocol.md`: the MiniLab 3 MIDI and SysEx protocol, verified on hardware where marked.
 - `docs/daw-comparison.md`: this extension compared with Arturia's integrations for other DAWs.
 - `docs/daw-integrations.md`: what those integrations do, with sources.
-- `reaper/test.RPP`: a small test project. `reaper/spike/`: the Lua prototype.
-- `tools/`: `ml3.py` (talk to the device from the shell), `reaper.sh` (build, install, start and script Reaper),
-  `fake-input.sh` (fake MiniLab input for Reaper), `cam-shot.sh` and `phone-shot.sh` (camera shots of the device).
+- `reaper/test.RPP`: a small test project.
+- `tools/`: `reaper.sh` (build, install, start and script Reaper), `fake-input.sh` (fake MiniLab input for Reaper,
+  to test without the device).
