@@ -455,6 +455,8 @@ struct Surface {
     /// Which page of 8 parameters the knobs control, and the FX it belongs to (a new FX starts at page 1).
     knob_page: usize,
     knob_fx: Option<(*mut MediaTrack, c_int)>,
+    /// Mixer mode: the knobs set the volumes of the 8 tracks in the selected track's group (1-8, 9-16, ...).
+    mixer: bool,
     /// Per fader: `Some(up)` after a move that did not catch the value yet.
     fader_waiting: [Option<bool>; 4],
     /// Screen message and when it ends.
@@ -495,6 +497,7 @@ impl Surface {
             controls: Controls::default(),
             knob_page: 0,
             knob_fx: None,
+            mixer: false,
             fader_waiting: [None; 4],
             notification: None,
             blink: true,
@@ -566,6 +569,13 @@ impl Surface {
             pads_held: self.pads_held,
             markers: self.markers.clone(),
             knobs: std::array::from_fn(|i| {
+                if self.mixer {
+                    let t = self.mixer_track(i)?;
+                    let volume = api.info(t, c"D_VOL");
+                    let position = api.volume_position(volume);
+                    let value = rules::volume_text(volume);
+                    return Some(Param { name: api.track_name(t), value, normalized: position as f64 / 127.0 });
+                }
                 let (t, fx) = api.knob_fx()?;
                 api.knob_param(t, fx, (self.knob_page * 8 + i) as c_int)
             }),
@@ -617,7 +627,8 @@ impl Surface {
             self.parser.push(&bytes, |m| messages.push(m.to_vec()));
             for m in messages {
                 let Some(event) = protocol::decode(&m) else { continue };
-                let cmd = self.status.update(&event).or_else(|| self.controls.handle(&event));
+                let now = self.started.elapsed();
+                let cmd = self.status.update(&event).or_else(|| self.controls.handle(&event, now));
                 // Watchdog pings get a program reply every few seconds: log those only when something changes.
                 if cmd.is_some() || !matches!(event, protocol::Event::Program(_)) {
                     self.log(format!("in  {} {event:?}", hex(&m)));
@@ -707,6 +718,11 @@ impl Surface {
                     }
                 }
             }
+            Command::SetKnob(knob, value) if self.mixer => {
+                if let Some(t) = self.mixer_track(knob as usize) {
+                    api.set_info(t, c"D_VOL", api.position_volume(value));
+                }
+            }
             Command::SetKnob(knob, value) => {
                 if let Some((t, fx)) = api.knob_fx() {
                     let param = (self.knob_page * 8) as c_int + knob as c_int;
@@ -715,12 +731,33 @@ impl Surface {
                     }
                 }
             }
+            Command::KnobPage(step) if self.mixer => {
+                let count = api.track_count() as i64;
+                if count > 0 {
+                    let first = (self.mixer_first() as i64 + step as i64 * 8).clamp(0, (count - 1) / 8 * 8);
+                    if first as usize != self.mixer_first() {
+                        self.select(first as usize);
+                    }
+                    let last = (first + 8).min(count);
+                    self.notify("Mixer", format!("Tracks {}-{last}", first + 1));
+                }
+            }
             Command::KnobPage(step) => {
                 if let Some((t, fx)) = api.knob_fx() {
                     let pages = (api.param_count(t, fx).max(1) as usize).div_ceil(8);
                     self.knob_page = (self.knob_page as i64 + step as i64).clamp(0, pages as i64 - 1) as usize;
                     let name = api.fx_name(t, fx);
                     self.notify(name, format!("Page {}/{}", self.knob_page + 1, pages));
+                }
+            }
+            Command::ToggleMixer => {
+                self.mixer = !self.mixer;
+                if self.mixer {
+                    let first = self.mixer_first();
+                    let last = (first + 8).min(api.track_count());
+                    self.notify("Mixer mode", format!("Knobs: volume {}-{last}", first + 1));
+                } else {
+                    self.notify("Plugin mode", "Knobs: plugin");
                 }
             }
             Command::ToggleFx => match api.selected_track() {
@@ -761,6 +798,16 @@ impl Surface {
             let target = selected.and_then(|t| self.api.fader_target(t, i)).map(|f| f.position);
             self.pickup.sync(i, target);
         }
+    }
+
+    /// Index of the first track in the selected track's group of 8.
+    fn mixer_first(&self) -> usize {
+        let selected = self.api.selected_track().map(|t| self.api.info(t, c"IP_TRACKNUMBER") as usize - 1);
+        selected.unwrap_or(0) / 8 * 8
+    }
+
+    fn mixer_track(&self, knob: usize) -> Option<*mut MediaTrack> {
+        self.api.track(self.mixer_first() + knob)
     }
 
     fn select(&self, index: usize) {

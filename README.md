@@ -17,12 +17,13 @@ The MiniLab must be in its DAW program (Shift + Pad 3).
 | Pads bank B (Shift + Pad 2) | Markers 1–8: a pad jumps to the marker with that number. Pads light in the marker colours; the marker the playhead is in is bright. A pad with no marker stays dark. Press M in Reaper to add a marker |
 | Encoder | Select the previous or next track |
 | Encoder click | Open the selected track's plugin window, or close it. A track with no plugin opens its FX chain, where Reaper offers its plugin list |
-| Encoder click + turn | Page through the plugin's parameters, 8 at a time |
+| Encoder click + turn | Page through the plugin's parameters, 8 at a time. In mixer mode: the next or previous 8 tracks |
+| Encoder held down (half a second) | Mixer mode on or off |
 | Shift + encoder | Move the playhead one bar. The screen shows the bar and the time. Turning back from the middle of a bar goes to its start first |
 | Shift + encoder click | Arm or disarm the selected track |
 | Shift + pads 4–8 | Loop, play/pause, stop, record, tap tempo. Lights follow Reaper's state while Shift is held; play and record blink while running. Tap tempo and loop show a short message |
 | Faders 1–4 | Volume, send 1, send 2, pan of the selected track. A fader takes over once it reaches the current value (pickup); until then the popup says which way to move it |
-| Knobs 1–8 | Parameters of the plugin whose window is open on the selected track, else its first plugin. Turning a knob shows the name and value on the screen |
+| Knobs 1–8 | Parameters of the plugin whose window is open on the selected track, else its first plugin. Turning a knob shows the name and value on the screen. In mixer mode: the volumes of 8 tracks (1–8, 9–16, ...: the group with the selected track) |
 | Keys | Play the armed track, as usual |
 
 It also recovers when the MiniLab is unplugged and plugged back in, and gives the MiniLab back its own screen and
@@ -30,7 +31,7 @@ colours when Reaper quits.
 
 Shift + Record with no armed track shows "No track armed" instead of opening Reaper's blocking warning.
 
-Not yet: a mixer mode. Bank B pads also send their notes (44–51) to the armed track, until the extension takes over
+Bank B pads also send their notes (44–51) to the armed track, until the extension takes over
 the MiniLab's input. `docs/daw-integrations.md` compares what Arturia's integrations do in other DAWs.
 
 ## Build and install

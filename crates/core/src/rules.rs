@@ -5,6 +5,10 @@
 
 use crate::protocol::{self, led_id, Event, Icons, PadBank, Program, Rgb, TransportButton, TransportIcon};
 use crate::queue::Key;
+use std::time::Duration;
+
+/// Holding the encoder down this long without turning toggles mixer mode instead of clicking.
+pub const LONG_PRESS: Duration = Duration::from_millis(500);
 
 /// A marker on a pad of bank B.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -211,10 +215,12 @@ pub enum Command {
     MoveFader(u8, u8),
     /// Knob index 0-7 and its position 0..=127, for the mapped parameter.
     SetKnob(u8, u8),
-    /// Encoder clicked and turned: the knobs move this many pages of 8 parameters.
+    /// Encoder clicked and turned: the knobs move this many pages of 8 parameters (or 8 tracks in mixer mode).
     KnobPage(i32),
     /// Encoder clicked and released without turning: show or close the selected track's FX.
     ToggleFx,
+    /// Encoder held down for [`LONG_PRESS`] without turning: knobs switch between the FX and 8 track volumes.
+    ToggleMixer,
     /// Shift + encoder: move the playhead this many bars (see [`bar_step`]).
     MovePlayhead(i32),
     /// The device switched program: connect again and redraw everything.
@@ -240,26 +246,34 @@ pub fn command(event: &Event) -> Option<Command> {
 }
 
 /// Device input -> commands, for inputs that depend on what came before: the encoder held down and turned
-/// ("click + turn", parameter pages) is not a click.
+/// ("click + turn", parameter pages) is not a click, and neither is a long press.
 #[derive(Debug, Default)]
 pub struct Controls {
-    encoder_held: bool,
+    /// When the encoder went down, while it is held.
+    pressed_at: Option<Duration>,
     turned_while_held: bool,
 }
 
 impl Controls {
-    pub fn handle(&mut self, event: &Event) -> Option<Command> {
+    /// `now`: any clock that only goes forward, for long presses.
+    pub fn handle(&mut self, event: &Event, now: Duration) -> Option<Command> {
         match *event {
             Event::EncoderClick { pressed: true, shifted: false } => {
-                self.encoder_held = true;
+                self.pressed_at = Some(now);
                 self.turned_while_held = false;
                 None
             }
             Event::EncoderClick { pressed: false, shifted: false } => {
-                let was_held = std::mem::take(&mut self.encoder_held);
-                (was_held && !self.turned_while_held).then_some(Command::ToggleFx)
+                let pressed_at = self.pressed_at.take()?;
+                if self.turned_while_held {
+                    None
+                } else if now.saturating_sub(pressed_at) >= LONG_PRESS {
+                    Some(Command::ToggleMixer)
+                } else {
+                    Some(Command::ToggleFx)
+                }
             }
-            Event::Encoder { delta, shifted: false } if self.encoder_held => {
+            Event::Encoder { delta, shifted: false } if self.pressed_at.is_some() => {
                 self.turned_while_held = true;
                 Some(Command::KnobPage(delta as i32))
             }
@@ -441,17 +455,31 @@ mod tests {
     #[test]
     fn click_and_turn_pages_click_alone_clicks() {
         let mut c = Controls::default();
+        let t = Duration::ZERO;
         let click = |pressed| Event::EncoderClick { pressed, shifted: false };
         let turn = |delta| Event::Encoder { delta, shifted: false };
-        assert_eq!(c.handle(&click(true)), None);
-        assert_eq!(c.handle(&turn(1)), Some(Command::KnobPage(1)));
-        assert_eq!(c.handle(&turn(1)), Some(Command::KnobPage(1)));
-        assert_eq!(c.handle(&click(false)), None); // it was a page turn, not a click
-        assert_eq!(c.handle(&click(true)), None);
-        assert_eq!(c.handle(&click(false)), Some(Command::ToggleFx));
-        assert_eq!(c.handle(&turn(-1)), Some(Command::SelectTrackBy(-1))); // released: turns pick tracks again
+        assert_eq!(c.handle(&click(true), t), None);
+        assert_eq!(c.handle(&turn(1), t), Some(Command::KnobPage(1)));
+        assert_eq!(c.handle(&turn(1), t), Some(Command::KnobPage(1)));
+        assert_eq!(c.handle(&click(false), t), None); // it was a page turn, not a click
+        assert_eq!(c.handle(&click(true), t), None);
+        assert_eq!(c.handle(&click(false), t), Some(Command::ToggleFx));
+        assert_eq!(c.handle(&turn(-1), t), Some(Command::SelectTrackBy(-1))); // released: turns pick tracks again
         let shifted = Event::Encoder { delta: 1, shifted: true };
-        assert_eq!(c.handle(&shifted), Some(Command::MovePlayhead(1)));
+        assert_eq!(c.handle(&shifted, t), Some(Command::MovePlayhead(1)));
+    }
+
+    #[test]
+    fn long_press_toggles_mixer() {
+        let mut c = Controls::default();
+        let click = |pressed| Event::EncoderClick { pressed, shifted: false };
+        let ms = Duration::from_millis;
+        assert_eq!(c.handle(&click(true), ms(1000)), None);
+        assert_eq!(c.handle(&click(false), ms(1000) + LONG_PRESS), Some(Command::ToggleMixer));
+        assert_eq!(c.handle(&click(true), ms(3000)), None);
+        assert_eq!(c.handle(&click(false), ms(3000) + LONG_PRESS - ms(1)), Some(Command::ToggleFx));
+        // A release without a press (e.g. held while Reaper started) does nothing.
+        assert_eq!(c.handle(&click(false), ms(5000)), None);
     }
 
     #[test]
