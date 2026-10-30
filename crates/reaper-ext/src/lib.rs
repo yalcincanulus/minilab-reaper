@@ -735,6 +735,7 @@ impl Surface {
                 self.notify(line1, line2);
             }
             Command::Redraw => self.connect(),
+            Command::Repaint => self.queue.forget_sent(),
         }
         self.dirty.set(true);
     }

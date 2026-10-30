@@ -217,8 +217,11 @@ pub enum Command {
     ToggleFx,
     /// Shift + encoder: move the playhead this many bars (see [`bar_step`]).
     MovePlayhead(i32),
-    /// The device switched program or pad bank: it forgot what we drew.
+    /// The device switched program: connect again and redraw everything.
     Redraw,
+    /// The device switched pad bank: send everything again, without connecting (connect switches it back to
+    /// bank A).
+    Repaint,
 }
 
 /// What a device event means for Reaper. `None` for events Reaper should simply receive as MIDI (keys, ...).
@@ -274,18 +277,18 @@ pub struct DeviceStatus {
 }
 
 impl DeviceStatus {
-    /// `Some(Command::Redraw)` when a known value changed.
+    /// A command when a known value changed: [`Command::Redraw`] for the program, [`Command::Repaint`] for the
+    /// pad bank.
     pub fn update(&mut self, event: &Event) -> Option<Command> {
         fn changed<T: PartialEq + Copy>(slot: &mut Option<T>, new: T) -> bool {
             let was = slot.replace(new);
             matches!(was, Some(old) if old != new)
         }
-        let changed = match *event {
-            Event::Program(p) => changed(&mut self.program, p),
-            Event::PadBank(b) => changed(&mut self.pad_bank, b),
-            _ => false,
-        };
-        changed.then_some(Command::Redraw)
+        match *event {
+            Event::Program(p) => changed(&mut self.program, p).then_some(Command::Redraw),
+            Event::PadBank(b) => changed(&mut self.pad_bank, b).then_some(Command::Repaint),
+            _ => None,
+        }
     }
 }
 
@@ -466,7 +469,7 @@ mod tests {
         let mut s = DeviceStatus::default();
         assert_eq!(s.update(&Event::PadBank(PadBank::A)), None); // first report (reply to connect)
         assert_eq!(s.update(&Event::PadBank(PadBank::A)), None); // repeat
-        assert_eq!(s.update(&Event::PadBank(PadBank::B)), Some(Command::Redraw));
+        assert_eq!(s.update(&Event::PadBank(PadBank::B)), Some(Command::Repaint));
         assert_eq!(s.update(&Event::Program(Program::Daw)), None);
         assert_eq!(s.update(&Event::Program(Program::Arturia)), Some(Command::Redraw));
     }

@@ -53,7 +53,7 @@ Status SysEx from the device (`F0 00 20 6B 7F 42 …` header):
 
 | Message | Body | Status |
 |---|---|---|
-| Connect (DAW hello) | `02 00 40 6A 21` | verified: required before LED/display messages take effect |
+| Connect (DAW hello) | `02 00 40 6A 21` | verified: required before LED/display messages take effect. Verified 2026-10-30: it also switches the pads back to bank A (the device then reports bank A), so don't send it on a bank change |
 | Disconnect | `02 00 40 6A 20` | verified 2026-10-29: LEDs go back to the device defaults. After it, LED messages still work but screen messages don't (the device shows its own "DAW" page) |
 | Request program | `01 00 40 01` | verified 2026-10-29: reply `02 00 40 01 <p>`, p = 1 in the DAW program, 0 in the Arturia program (verified both) |
 | LED colour | `02 02 16 <id> <r> <g> <b>` (0–127 each) | verified |
